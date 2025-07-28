@@ -1,20 +1,32 @@
 use core::fmt;
 
+
 mod win_media;
-mod consts;
+pub mod consts;
 
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MediaInfo {
     pub player_name: String,
     pub artist_name: String,
     pub song_name: String,
     pub album_name: String,
     pub status: MediaStatus,
-    pub media_type: MediaType
+    pub media_type: MediaType,
+    pub end_time: i64,
+    pub current_position: i64,
 }
 
-#[derive(Debug)]
+impl PartialEq for MediaInfo {
+   fn eq(&self, other: &Self) -> bool {
+       self.album_name == other.album_name 
+       && self.artist_name == other.artist_name 
+       && self.song_name == other.song_name
+       && self.player_name == other.player_name
+   } 
+}
+
+#[derive(Debug, Clone)]
 pub enum MediaStatus {
     Closed,
     Opened,
@@ -24,7 +36,7 @@ pub enum MediaStatus {
     Paused
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum MediaType {
     Unknown,
     Music,
