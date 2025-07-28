@@ -1,0 +1,10 @@
+[package]
+name = "ample"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+discord-rich-presence = "0.2.5"
+log = "0.4.27"
+simplelog = "0.12.2"
+sys_media = { path = "../sys-media" }

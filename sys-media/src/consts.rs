@@ -1,0 +1,1 @@
+pub const APPLE_MUSIC_ID: &str = "AppleMusic.exe";
