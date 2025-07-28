@@ -56,13 +56,15 @@ pub fn get_current_session_info(session: GlobalSystemMediaTransportControlsSessi
     // Neat.
     if player.to_string_lossy() == APPLE_MUSIC_ID {
         let apple_artist_album_string = media_props.Artist()?.to_string_lossy();
-        dbg!(&apple_artist_album_string);
         let mut splits = apple_artist_album_string.split('—');
-        // dbg!(splits.collect::<Vec<&str>>());
 
         artist_name = splits.next().expect("apple music has changed how they display artist and album names").trim().to_owned();
         album_name = splits.next().expect("apple music has changed how they display artist and album names").trim().to_owned();
     }
+
+    let timeline_info = session.GetTimelineProperties()?;
+    let end_time = timeline_info.EndTime()?.Duration / 10; // For some reason, these values are 10x smaller than a microsecond?
+    let position = timeline_info.Position()?.Duration / 10;
     
     Ok(Some(
         MediaInfo { 
@@ -71,7 +73,9 @@ pub fn get_current_session_info(session: GlobalSystemMediaTransportControlsSessi
             song_name: media_props.Title()?.to_string_lossy(), 
             album_name,
             status,
-            media_type: m_type
+            media_type: m_type,
+            end_time,
+            current_position: position
         }
     ))
 }
