@@ -1,4 +1,4 @@
-use std::{thread::{self, yield_now}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
+use std::{thread, time::{Duration, SystemTime, UNIX_EPOCH}};
 
 use log::*;
 use simplelog::*;
