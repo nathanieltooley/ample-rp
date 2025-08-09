@@ -103,10 +103,21 @@ impl MediaListener {
             self.previously_played = Some(media_info);
         } else {
             debug!("Media is paused. Clearing activity");
-            if let Err(error) = self.client.clear_activity() {
-                error!("Error while clearing activity: {error}");
-            }
+            self.clear_status();
         }
+    }
+
+    pub fn clear_status(&mut self) {
+        if let Err(err) = self.client.clear_activity() {
+            error!("Error while clearing activity: {err}");
+        }
+    }
+}
+
+// doesn't seem necessary but just in case
+impl Drop for MediaListener {
+    fn drop(&mut self) {
+        self.clear_status();
     }
 }
 
@@ -150,6 +161,8 @@ pub mod service {
 
         loop {
             if paused {
+                listener.clear_status();
+
                 // block until we receive since we need to wait for a Continue message anyway
                 match rx.recv() {
                     Err(_) => {
