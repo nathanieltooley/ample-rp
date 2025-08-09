@@ -8,3 +8,7 @@ discord-rich-presence = "0.2.5"
 log = "0.4.27"
 simplelog = "0.12.2"
 sys_media = { path = "../sys-media" }
+windows-service = {version = "0.8.0", optional = true}
+
+[features]
+win_service = ["windows-service"]
