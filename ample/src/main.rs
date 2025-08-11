@@ -1,4 +1,8 @@
+mod lastfm;
+
 use std::{
+    env,
+    io::{self, Write},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -7,12 +11,90 @@ use discord_rich_presence::{activity::Timestamps, *};
 use log::*;
 use simplelog::*;
 use sys_media::{MediaInfo, MediaStatus};
+use ureq::{config::Config, tls::{TlsConfig, TlsConfigBuilder}, Agent};
 
 const AMPLE_DPRC_ID: u64 = 1399214780564246670;
 const TICK_TIME: Duration = Duration::from_secs(5);
+const APP_NAME: &str = "ample";
+const SECRET_ENTRY_NAME: &str = "ampleSecret";
+const PASSWORD_ENTRY_NAME: &str = "amplePassword";
+const SESSION_ENTRY_NAME: &str = "ampleSession";
 
 fn main() {
-    SimpleLogger::init(LevelFilter::Debug, Config::default()).unwrap();
+    SimpleLogger::init(
+        LevelFilter::Debug,
+        ConfigBuilder::new()
+            .set_location_level(LevelFilter::Debug)
+            .set_level_color(Level::Error, Some(Color::Red))
+            .build(),
+    )
+    .unwrap();
+
+    let args = env::args();
+    let mut password_flag = false;
+    let mut secret_flag = false;
+
+    // simple arg parsing
+    for arg in args {
+        if arg == "--password" || arg == "-p" {
+            password_flag = true;
+        } else if arg == "--secret" || arg == "-s" {
+            secret_flag = true;
+        } else {
+            warn!("Unknown argument: {arg}")
+        }
+    }
+
+    if password_flag {
+        let input = prompted_input("Password: ");
+        let password_entry =
+            match keyring::Entry::new_with_target(PASSWORD_ENTRY_NAME, APP_NAME, APP_NAME) {
+                Err(err) => {
+                    error!("{err}");
+                    return;
+                }
+                Ok(entry) => entry,
+            };
+        match password_entry.set_password(&input) {
+            Err(err) => {
+                error!("Could not set password!: {err}");
+                return;
+            }
+            Ok(()) => info!("Password has been set!"),
+        }
+    }
+
+    if secret_flag {
+        let input = prompted_input("API Secret: ");
+        let secret_entry =
+            match keyring::Entry::new_with_target(SECRET_ENTRY_NAME, APP_NAME, APP_NAME) {
+                Err(err) => {
+                    error!("{err}");
+                    return;
+                }
+                Ok(entry) => entry,
+            };
+        match secret_entry.set_password(&input) {
+            Err(err) => {
+                error!("Failed to set secret!: {err}");
+                return;
+            }
+            Ok(()) => info!("Secret has been set!"),
+        }
+    }
+
+    if password_flag || secret_flag {
+        return;
+    }
+
+    if let Err(err) = dotenvy::dotenv() {
+        if err.not_found() {
+            info!("No .env file found. Skipping...")
+        } else {
+            error!("{err}");
+            return;
+        }
+    }
 
     #[cfg(feature = "win_service")]
     {
@@ -26,6 +108,17 @@ fn main() {
     #[allow(unused_variables)]
     {
         let mut listener = MediaListener::new(true);
+        let client = Agent::new_with_config(Config::builder().http_status_as_error(false).build());
+        let creds = match lastfm::LastFmCreds::get_creds(client) {
+            Err(err) => {
+                debug!("{err:?}");
+                error!("{err}");
+                return;
+            }
+            Ok(x) => x,
+        };
+
+        let last_fm = lastfm::LastFm::new(creds);
 
         loop {
             let currently_playing = sys_media::get_current_playing_info();
@@ -43,6 +136,19 @@ fn main() {
             thread::sleep(TICK_TIME);
         }
     }
+}
+
+fn prompted_input(prompt: &str) -> String {
+    io::stdout()
+        .write_all(prompt.as_bytes())
+        .expect("Could not write to stdout");
+    io::stdout().flush().expect("can't flush :(");
+
+    let mut input = String::new();
+    io::stdin()
+        .read_line(&mut input)
+        .expect("Failed to read stdin!");
+    input.trim().to_owned()
 }
 
 struct MediaListener {
@@ -135,8 +241,8 @@ pub mod service {
     use crate::*;
 
     use std::ffi::OsString;
-    use std::sync::mpsc::RecvTimeoutError;
     use std::sync::mpsc;
+    use std::sync::mpsc::RecvTimeoutError;
 
     use windows_service::service::{
         ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType,
@@ -152,7 +258,7 @@ pub mod service {
     }
 
     pub fn run() -> windows_service::Result<()> {
-        service_dispatcher::start("ample", ffi_service_main)
+        service_dispatcher::start(APP_NAME, ffi_service_main)
     }
 
     fn service_loop(rx: mpsc::Receiver<ThreadMessage>) {
@@ -238,7 +344,7 @@ pub mod service {
             }
         };
 
-        let service_handle = match service_control_handler::register("ample", event_handler) {
+        let service_handle = match service_control_handler::register(APP_NAME, event_handler) {
             Ok(handle) => handle,
             Err(err) => {
                 error!("Error trying to setup up service control handler: {err}");
