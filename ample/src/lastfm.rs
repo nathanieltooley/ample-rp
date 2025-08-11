@@ -4,7 +4,7 @@ use thiserror::Error;
 use keyring::Entry;
 use ureq::Agent;
 
-use std::env;
+use std::{collections::HashMap, env};
 
 const API_ROOT: &str = "https://ws.audioscrobbler.com/2.0";
 
@@ -25,7 +25,7 @@ pub enum CredsError {
     #[error("LastFM secret has not been set! Call with --secret flag to set secret!")]
     MissingApiSecret,
     #[error("Http error: {0}")]
-    Http(#[from] ureq::Error)
+    Http(#[from] ureq::Error),
 }
 
 impl LastFm {
@@ -49,8 +49,6 @@ impl LastFmCreds {
         let api_key = env::var("AMPLE_API_KEY").map_err(|var_error| CredsError::Env("AMPLE_API_KEY", var_error))?;
         let username = env::var("AMPLE_USERNAME").map_err(|var_error| CredsError::Env("AMPLE_USERNAME", var_error))?;
 
-        let user = "test";
-
         let password_entry = Entry::new_with_target(crate::PASSWORD_ENTRY_NAME, crate::APP_NAME, crate::APP_NAME)?;
         let secret_entry = Entry::new_with_target(crate::SECRET_ENTRY_NAME, crate::APP_NAME, crate::APP_NAME)?;
         
@@ -72,21 +70,22 @@ impl LastFmCreds {
             Err(err) => {
                 // Ask LastFM for session token
                 if let keyring::Error::NoEntry = err {
-                    let raw_params = &mut [
-                        ("method", "auth.getMobileSession"),
-                        ("api_key", &api_key),
-                        ("password", &password),
-                        ("username", &username),
-                    ];
-                    let mut params = Params(raw_params);
-                    let sig = create_api_sig(&mut params, &secret);
+                    let mut map_params = HashMap::new();
+                    map_params.insert("method", "auth.getMobileSession");
+                    map_params.insert("api_key", &api_key);
+                    map_params.insert("password", &password);
+                    map_params.insert("username", &username);
+
+                    let sig = create_api_sig(&map_params, &secret);
+                    map_params.insert("api_sig", &sig);
+                    map_params.insert("format", "json");
+
                     debug!("sig: {sig}");
-                    let uri = create_param_uri(params, Some(sig));
-                    debug!("uri: {uri}");
+                    debug!("uri: {API_ROOT}");
 
                     let mut rep = client
-                        .post(uri)
-                        .send("")?;
+                        .post(API_ROOT)
+                        .send_form(map_params)?;
 
                     let body = rep.body_mut().read_to_string()?;
 
@@ -113,8 +112,6 @@ impl LastFmCreds {
     }
 }
 
-struct Params<'a>(&'a mut [(&'a str, &'a str)]);
-
 #[derive(Deserialize)]
 struct AuthMobileSessionResponse {
     pub session: AuthMobileSessionResponseInner
@@ -130,11 +127,14 @@ struct AuthMobileSessionResponseInner {
 /// Creates an MD5 hash needed to sign API requests.
 /// This function will mutate params by sorting them first,
 /// which is required by last.fm.
-fn create_api_sig(params: &mut Params, secret: &str) -> String {
+fn create_api_sig(params: &HashMap<&str, &str>, secret: &str) -> String {
     let mut unhashed_api_string = String::new();
-    params.0.sort_by(|a, b| a.0.cmp(b.0));
+    let mut sorted_params: Vec<(&&str, &&str)>  = params.iter().collect();
+    sorted_params.sort_by(|a, b| {
+        a.0.cmp(b.0)
+    });
 
-    for (name, value) in &mut *params.0 {
+    for (name, value) in sorted_params {
         unhashed_api_string.push_str(name);
         unhashed_api_string.push_str(value);
     }
@@ -148,10 +148,13 @@ fn create_api_sig(params: &mut Params, secret: &str) -> String {
     format!("{dig:x}")
 }
 
-fn create_param_uri(params: Params, sig: Option<String>) -> String {
+fn create_param_uri(params: &HashMap<&str, &str>, sig: Option<String>) -> String {
     let mut uri = format!("{API_ROOT}/?");
-    for i in 0..params.0.len() {
-        let (name, value) = params.0[i];
+    let mut params: Vec<(&&str, &&str)> = params.iter().collect();
+    params.sort_by(|a, b| {
+        a.0.cmp(b.0)
+    });
+    for (i, (name, value)) in params.into_iter().enumerate() {
         if i != 0 {
             uri.push('&');
         }
@@ -176,17 +179,15 @@ mod tests {
 
     #[test]
     fn param_uri() {
-        let test_params = &mut [
-            ("method", "juice"),
-            ("api_key", "apple"),
-            ("fortnite", "battlePass"),
-        ];
-        let params = Params(test_params);
+        let mut params = HashMap::new();
+        params.insert("method", "juice");
+        params.insert("api_key", "apple");
+        params.insert("fortnite", "battlePass");
 
-        let uri = create_param_uri(params, None);
+        let uri = create_param_uri(&params, None);
         assert_eq!(
             uri,
-            "http://ws.audioscrobbler.com/2.0/?method=juice&api_key=apple&fortnite=battlePass&format=json"
+            "https://ws.audioscrobbler.com/2.0/?api_key=apple&fortnite=battlePass&method=juice&format=json"
         )
     }
 }
