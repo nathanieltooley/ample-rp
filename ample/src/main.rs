@@ -11,7 +11,9 @@ use discord_rich_presence::{activity::Timestamps, *};
 use log::*;
 use simplelog::*;
 use sys_media::{MediaInfo, MediaStatus};
-use ureq::{config::Config, tls::{TlsConfig, TlsConfigBuilder}, Agent};
+use ureq::{config::Config, Agent};
+
+use crate::lastfm::LastFm;
 
 const AMPLE_DPRC_ID: u64 = 1399214780564246670;
 const TICK_TIME: Duration = Duration::from_secs(5);
@@ -107,9 +109,9 @@ fn main() {
     #[allow(unreachable_code)]
     #[allow(unused_variables)]
     {
-        let mut listener = MediaListener::new(true);
+        // TODO: Generalize this code so it can be used in the service_loop function
         let client = Agent::new_with_config(Config::builder().http_status_as_error(false).build());
-        let creds = match lastfm::LastFmCreds::get_creds(client) {
+        let creds = match lastfm::LastFmCreds::get_creds(client.clone()) {
             Err(err) => {
                 debug!("{err:?}");
                 error!("{err}");
@@ -117,8 +119,11 @@ fn main() {
             }
             Ok(x) => x,
         };
+        
+        // TODO: make this optional
+        let last_fm = lastfm::LastFm::new(client.clone(), creds);
 
-        let last_fm = lastfm::LastFm::new(creds);
+        let mut listener = MediaListener::new(true, Some(last_fm));
 
         loop {
             let currently_playing = sys_media::get_current_playing_info();
@@ -155,14 +160,20 @@ struct MediaListener {
     only_am: bool,
     client: DiscordIpcClient,
     previously_played: Option<MediaInfo>,
+    previously_played_started: Option<SystemTime>,
+    played_has_been_scrobbled: bool,
+    last_fm: Option<LastFm>
 }
 
 impl MediaListener {
-    pub fn new(only_am: bool) -> MediaListener {
+    pub fn new(only_am: bool, last_fm: Option<LastFm>) -> MediaListener {
         MediaListener {
             only_am,
             client: get_client(),
             previously_played: None,
+            previously_played_started: None,
+            played_has_been_scrobbled: false,
+            last_fm,
         }
     }
 
@@ -172,12 +183,36 @@ impl MediaListener {
         if let MediaStatus::Playing = media_info.status
             && valid_player
         {
+            // New song
             if self.previously_played.as_ref() != Some(&media_info) {
                 info!("App currently playing media: {}", media_info.player_name);
                 info!(
                     "Currently Playing: {} by {} on {}",
                     media_info.song_name, media_info.artist_name, media_info.album_name
                 );
+
+                self.previously_played_started = Some(SystemTime::now());
+                self.played_has_been_scrobbled = false;
+                if let Some(ref last_fm) = self.last_fm {
+                    if let Err(err) = last_fm.now_playing(&media_info.artist_name, &media_info.song_name, Some(&media_info.album_name)) {
+                        error!("{err}")
+                    }
+                }
+            } else if let Some(ref last_fm) = self.last_fm {
+            // Try to scrobble current song
+                let song_len = Duration::from_micros(media_info.end_time as u64);
+                let duration = Duration::from_micros(media_info.current_position as u64);
+
+                let song_len_secs = song_len.as_secs();
+
+                if song_len_secs > 30 && duration.as_secs() > song_len_secs / 2 && !self.played_has_been_scrobbled {
+                    let timestamp = self.previously_played_started.unwrap_or_else(SystemTime::now);
+                    // TODO: try and redo failed scrobbles
+                    match last_fm.scrobble(&media_info.artist_name, &media_info.song_name, timestamp, Some(&media_info.album_name)) {
+                        Ok(()) => self.played_has_been_scrobbled = true,
+                        Err(err) => error!("{err}")
+                    }
+                }
             }
 
             let now = SystemTime::now();
@@ -262,7 +297,7 @@ pub mod service {
     }
 
     fn service_loop(rx: mpsc::Receiver<ThreadMessage>) {
-        let mut listener = MediaListener::new(true);
+        let mut listener = MediaListener::new(true, None);
         let mut paused = false;
 
         loop {

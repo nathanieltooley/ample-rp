@@ -1,10 +1,11 @@
 use log::debug;
 use serde::Deserialize;
+use serde_json::de;
 use thiserror::Error;
 use keyring::Entry;
 use ureq::Agent;
 
-use std::{collections::HashMap, env};
+use std::{collections::HashMap, env, thread::panicking, time::{Instant, SystemTime, UNIX_EPOCH}};
 
 const API_ROOT: &str = "https://ws.audioscrobbler.com/2.0";
 
@@ -12,6 +13,38 @@ pub struct LastFm {
     client: ureq::Agent,
     creds: LastFmCreds,
 }
+
+pub struct LastFmCreds {
+    pub api_key: String,
+    // TODO: Get rid of username and password fields
+    username: String,
+    password: String,
+    pub api_secret: String,
+    pub session_token: String,
+}
+
+#[derive(Deserialize)]
+struct AuthMobileSessionResponse {
+    pub session: AuthMobileSessionResponseInner
+}
+
+#[derive(Deserialize)]
+struct AuthMobileSessionResponseInner {
+    pub name: String,
+    pub key: String,
+    pub subscriber: i64,
+}
+
+// #[derive(Deserialize)]
+// struct ScrobbleResponse {
+
+// }
+
+// #[derive(Deserialize)]
+// struct Scrobble {
+//     pub track: String,
+//     pub artist: String,
+// }
 
 #[derive(Error, Debug)]
 pub enum CredsError {
@@ -28,21 +61,80 @@ pub enum CredsError {
     Http(#[from] ureq::Error),
 }
 
+pub struct ScrobbleError;
+
 impl LastFm {
-    pub fn new(creds: LastFmCreds) -> LastFm {
+    pub fn new(client: ureq::Agent, creds: LastFmCreds) -> LastFm {
         LastFm {
-            client: ureq::agent(),
+            client,
             creds
         }
     }
+
+    pub fn scrobble(&self, artist: &str, track: &str, timestamp: SystemTime, album: Option<&str>) -> Result<(), ureq::Error> {
+        let timestamp_str = format!("{}", timestamp.duration_since(UNIX_EPOCH).unwrap().as_secs());
+        let mut params = HashMap::new();
+        params.insert("method", "track.scrobble");
+        params.insert("artist", artist);
+        params.insert("track", track);
+        params.insert("timestamp", &timestamp_str);
+        params.insert("api_key", &self.creds.api_key);
+        params.insert("sk", &self.creds.session_token);
+        
+        if let Some(album) = album {
+            params.insert("album", album);
+        }
+        
+        let sig = create_api_sig(&params, &self.creds.api_secret);
+        params.insert("format", "json");
+        params.insert("api_sig", &sig);
+
+        let mut rep = self.client.post(API_ROOT).send_form(params)?;
+        let body = rep.body_mut().read_to_string()?;
+
+        // ureq::http_status_as_error is set to false so that this can happen
+        // inbetween the error. There might be a better way of doing this but im not sure.
+        debug!("{body}");
+
+        if rep.status().is_client_error() || rep.status().is_server_error() {
+            return Err(ureq::Error::StatusCode(rep.status().as_u16()));
+        }
+
+        Ok(())
+    }
+
+    pub fn now_playing(&self, artist: &str, track: &str, album: Option<&str>) -> Result<(), ureq::Error> {
+        let mut params = HashMap::new();
+        params.insert("method", "track.updateNowPlaying");
+        params.insert("artist", artist);
+        params.insert("track", track);
+        params.insert("api_key", &self.creds.api_key);
+        params.insert("sk", &self.creds.session_token);
+        
+        if let Some(album) = album {
+            params.insert("album", album);
+        }
+        
+        let sig = create_api_sig(&params, &self.creds.api_secret);
+        params.insert("format", "json");
+        params.insert("api_sig", &sig);
+
+        let mut rep = self.client.post(API_ROOT).send_form(params)?;
+        let body = rep.body_mut().read_to_string()?;
+
+        debug!("{body}");
+
+        if rep.status().is_client_error() || rep.status().is_server_error() {
+            return Err(ureq::Error::StatusCode(rep.status().as_u16()));
+        }
+
+        Ok(())
+    }
 }
-pub struct LastFmCreds {
-    pub api_key: String,
-    pub username: String,
-    pub password: String,
-    pub api_secret: String,
-    pub session_token: String,
-}
+
+/// Represents all required credentials for autheticated LastFM API requests.
+/// This struct uses mobile authentication so that the application does not have to
+/// open a web browser.
 
 impl LastFmCreds {
     pub fn get_creds(client: Agent) -> Result<LastFmCreds, CredsError> {
@@ -112,21 +204,7 @@ impl LastFmCreds {
     }
 }
 
-#[derive(Deserialize)]
-struct AuthMobileSessionResponse {
-    pub session: AuthMobileSessionResponseInner
-}
-
-#[derive(Deserialize)]
-struct AuthMobileSessionResponseInner {
-    pub name: String,
-    pub key: String,
-    pub subscriber: i64,
-}
-
 /// Creates an MD5 hash needed to sign API requests.
-/// This function will mutate params by sorting them first,
-/// which is required by last.fm.
 fn create_api_sig(params: &HashMap<&str, &str>, secret: &str) -> String {
     let mut unhashed_api_string = String::new();
     let mut sorted_params: Vec<(&&str, &&str)>  = params.iter().collect();
@@ -148,6 +226,9 @@ fn create_api_sig(params: &HashMap<&str, &str>, secret: &str) -> String {
     format!("{dig:x}")
 }
 
+/// Creates a uri from API_ROOT that contains the given params.
+/// For a more consistent output (since iterating through a HashMap has a random order),
+/// the parameters are sorted.
 fn create_param_uri(params: &HashMap<&str, &str>, sig: Option<String>) -> String {
     let mut uri = format!("{API_ROOT}/?");
     let mut params: Vec<(&&str, &&str)> = params.iter().collect();
