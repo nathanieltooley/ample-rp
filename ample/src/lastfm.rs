@@ -1,11 +1,12 @@
 use log::debug;
 use serde::Deserialize;
-use serde_json::de;
 use thiserror::Error;
 use keyring::Entry;
 use ureq::Agent;
 
-use std::{collections::HashMap, env, thread::panicking, time::{Instant, SystemTime, UNIX_EPOCH}};
+use std::{collections::HashMap, env, time::{SystemTime, UNIX_EPOCH}};
+
+use crate::uri;
 
 const API_ROOT: &str = "https://ws.audioscrobbler.com/2.0";
 
@@ -16,9 +17,6 @@ pub struct LastFm {
 
 pub struct LastFmCreds {
     pub api_key: String,
-    // TODO: Get rid of username and password fields
-    username: String,
-    password: String,
     pub api_secret: String,
     pub session_token: String,
 }
@@ -35,16 +33,41 @@ struct AuthMobileSessionResponseInner {
     pub subscriber: i64,
 }
 
-// #[derive(Deserialize)]
-// struct ScrobbleResponse {
+#[derive(Deserialize, Debug)]
+struct TrackInfoResponse {
+    pub track: TrackInfo
+}
 
-// }
+#[derive(Deserialize, Debug)]
+pub struct TrackInfo {
+    pub name: String,
+    pub artist: ArtistInfo,
+    pub album: AlbumInfo,
+}
 
-// #[derive(Deserialize)]
-// struct Scrobble {
-//     pub track: String,
-//     pub artist: String,
-// }
+#[derive(Deserialize, Debug)]
+pub struct ArtistInfo {
+    pub name: String
+}
+
+#[derive(Deserialize, Debug)]
+pub struct AlbumInfo {
+    pub artist: String,
+    pub title: String,
+
+    #[serde(rename = "image")]
+    pub images: Vec<ImageInfo>
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ImageInfo {
+    // thought about making this an enum but I'm only gonna use
+    // small images
+    pub size: String,
+
+    #[serde(rename = "#text")]
+    pub url: String
+}
 
 #[derive(Error, Debug)]
 pub enum CredsError {
@@ -130,12 +153,35 @@ impl LastFm {
 
         Ok(())
     }
+
+    pub fn get_track_info(&self, artist: &str, track: &str) -> Result<TrackInfo, ureq::Error> {
+        let mut params = HashMap::new();
+        params.insert("method", "track.getInfo");
+        params.insert("artist", artist);
+        params.insert("track", track);
+        params.insert("api_key", &self.creds.api_key);
+        params.insert("format", "json");
+
+        let uri = create_param_uri(&params, None);
+        debug!("{uri}");
+        let mut rep = self.client.get(uri).call()?;
+        let body = rep.body_mut().read_to_string()?;
+
+        debug!("{body}");
+
+        if rep.status().is_client_error() || rep.status().is_server_error() {
+            return Err(ureq::Error::StatusCode(rep.status().as_u16()));
+        }
+
+        let track: TrackInfoResponse = serde_json::from_str(&body)?;
+
+        Ok(track.track)
+    }
 }
 
 /// Represents all required credentials for autheticated LastFM API requests.
 /// This struct uses mobile authentication so that the application does not have to
 /// open a web browser.
-
 impl LastFmCreds {
     pub fn get_creds(client: Agent) -> Result<LastFmCreds, CredsError> {
         let api_key = env::var("AMPLE_API_KEY").map_err(|var_error| CredsError::Env("AMPLE_API_KEY", var_error))?;
@@ -200,7 +246,7 @@ impl LastFmCreds {
         };
 
 
-        Ok(LastFmCreds {api_key, username, password, api_secret: secret, session_token})
+        Ok(LastFmCreds {api_key, api_secret: secret, session_token})
     }
 }
 
@@ -240,7 +286,10 @@ fn create_param_uri(params: &HashMap<&str, &str>, sig: Option<String>) -> String
             uri.push('&');
         }
 
-        uri.push_str(&format!("{name}={value}"));
+        let encoded_name = uri::percent_encode(name);
+        let encoded_value = uri::percent_encode(value);
+
+        uri.push_str(&format!("{encoded_name}={encoded_value}"));
     }
 
     if let Some(sig) = sig {
