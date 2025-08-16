@@ -1,4 +1,5 @@
 mod lastfm;
+mod uri;
 
 use std::{
     env,
@@ -7,13 +8,13 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use discord_rich_presence::{activity::Timestamps, *};
+use discord_rich_presence::{activity::{Assets, Timestamps}, *};
 use log::*;
 use simplelog::*;
 use sys_media::{MediaInfo, MediaStatus};
 use ureq::{config::Config, Agent};
 
-use crate::lastfm::LastFm;
+use crate::lastfm::{LastFm, TrackInfo};
 
 const AMPLE_DPRC_ID: u64 = 1399214780564246670;
 const TICK_TIME: Duration = Duration::from_secs(5);
@@ -156,12 +157,18 @@ fn prompted_input(prompt: &str) -> String {
     input.trim().to_owned()
 }
 
+struct PlayingSongInfo {
+    pub last_fm_info: TrackInfo,
+    pub scrobbed: bool,
+}
+
 struct MediaListener {
     only_am: bool,
     client: DiscordIpcClient,
     previously_played: Option<MediaInfo>,
     previously_played_started: Option<SystemTime>,
-    played_has_been_scrobbled: bool,
+    current_has_been_scrobbled: bool,
+    current_song_img: String,
     last_fm: Option<LastFm>
 }
 
@@ -171,8 +178,9 @@ impl MediaListener {
             only_am,
             client: get_client(),
             previously_played: None,
+            current_song_img: String::new(),
             previously_played_started: None,
-            played_has_been_scrobbled: false,
+            current_has_been_scrobbled: false,
             last_fm,
         }
     }
@@ -192,12 +200,24 @@ impl MediaListener {
                 );
 
                 self.previously_played_started = Some(SystemTime::now());
-                self.played_has_been_scrobbled = false;
                 if let Some(ref last_fm) = self.last_fm {
                     if let Err(err) = last_fm.now_playing(&media_info.artist_name, &media_info.song_name, Some(&media_info.album_name)) {
                         error!("{err}")
                     }
+
+                    let lf_track_info = last_fm.get_track_info(&media_info.artist_name, &media_info.song_name);
+                    match lf_track_info {
+                        Ok(track) => {
+                            debug!("{track:?}");
+                            self.current_song_img = track.album.images.iter().find(|info| info.size == "large").map(|info| info.url.clone()).unwrap_or_default()
+                        },
+                        Err(err) => {
+                            error!("{err}")
+                        }
+                    }
+
                 }
+
             } else if let Some(ref last_fm) = self.last_fm {
             // Try to scrobble current song
                 let song_len = Duration::from_micros(media_info.end_time as u64);
@@ -205,11 +225,11 @@ impl MediaListener {
 
                 let song_len_secs = song_len.as_secs();
 
-                if song_len_secs > 30 && duration.as_secs() > song_len_secs / 2 && !self.played_has_been_scrobbled {
+                if song_len_secs > 30 && duration.as_secs() > song_len_secs / 2 && !self.current_has_been_scrobbled {
                     let timestamp = self.previously_played_started.unwrap_or_else(SystemTime::now);
                     // TODO: try and redo failed scrobbles
                     match last_fm.scrobble(&media_info.artist_name, &media_info.song_name, timestamp, Some(&media_info.album_name)) {
-                        Ok(()) => self.played_has_been_scrobbled = true,
+                        Ok(()) => self.current_has_been_scrobbled = true,
                         Err(err) => error!("{err}")
                     }
                 }
@@ -231,6 +251,7 @@ impl MediaListener {
                 .details(&media_info.song_name)
                 .state(&state_name)
                 .activity_type(activity::ActivityType::Listening)
+                .assets(Assets::new().large_image(&self.current_song_img))
                 .timestamps(
                     Timestamps::new()
                         .start(start_dur.as_secs() as i64)
