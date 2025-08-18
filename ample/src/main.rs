@@ -2,19 +2,19 @@ mod lastfm;
 mod uri;
 
 use std::{
-    env,
-    io::{self, Write},
-    thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    env, fmt::format, io::{self, Write}, thread, time::{Duration, SystemTime, UNIX_EPOCH}
 };
 
-use discord_rich_presence::{activity::{Assets, Timestamps}, *};
+use discord_rich_presence::{
+    activity::{Assets, Timestamps},
+    *,
+};
 use log::*;
 use simplelog::*;
 use sys_media::{MediaInfo, MediaStatus};
-use ureq::{config::Config, Agent};
+use ureq::{Agent, config::Config};
 
-use crate::lastfm::{LastFm, TrackInfo};
+use crate::lastfm::{CredsError, LastFm, LastFmCreds, TrackInfo};
 
 const AMPLE_DPRC_ID: u64 = 1399214780564246670;
 const TICK_TIME: Duration = Duration::from_secs(5);
@@ -24,8 +24,30 @@ const PASSWORD_ENTRY_NAME: &str = "amplePassword";
 const SESSION_ENTRY_NAME: &str = "ampleSession";
 
 fn main() {
+    if let Err(err) = dotenvy::dotenv() {
+        if err.not_found() {
+            info!("No .env file found. Skipping...")
+        } else {
+            error!("{err}");
+            return;
+        }
+    }
+
+    let debug = match std::env::var("AMPLE_DEBUG") {
+        Ok(profile) => {
+            profile == "debug"
+        },
+        Err(err) => panic!("{err}")
+    };
+
+    let log_level = if debug {
+        LevelFilter::Debug
+    } else {
+        LevelFilter::Info
+    };
+
     SimpleLogger::init(
-        LevelFilter::Debug,
+        log_level,
         ConfigBuilder::new()
             .set_location_level(LevelFilter::Debug)
             .set_level_color(Level::Error, Some(Color::Red))
@@ -36,6 +58,7 @@ fn main() {
     let args = env::args();
     let mut password_flag = false;
     let mut secret_flag = false;
+
 
     // simple arg parsing
     for arg in args {
@@ -90,14 +113,6 @@ fn main() {
         return;
     }
 
-    if let Err(err) = dotenvy::dotenv() {
-        if err.not_found() {
-            info!("No .env file found. Skipping...")
-        } else {
-            error!("{err}");
-            return;
-        }
-    }
 
     #[cfg(feature = "win_service")]
     {
@@ -112,19 +127,21 @@ fn main() {
     {
         // TODO: Generalize this code so it can be used in the service_loop function
         let client = Agent::new_with_config(Config::builder().http_status_as_error(false).build());
-        let creds = match lastfm::LastFmCreds::get_creds(client.clone()) {
-            Err(err) => {
-                debug!("{err:?}");
-                error!("{err}");
-                return;
-            }
-            Ok(x) => x,
-        };
-        
-        // TODO: make this optional
-        let last_fm = lastfm::LastFm::new(client.clone(), creds);
+        let retry_attempts = 10;
+        let cred_attempt = retry_creds(client.clone(), retry_attempts);
 
-        let mut listener = MediaListener::new(true, Some(last_fm));
+        // TODO: make this optional
+        let last_fm = match cred_attempt {
+            Ok(creds) => {
+                Some(lastfm::LastFm::new(client.clone(), creds))
+            },
+            Err(err) => {
+                error!("LastFM support not enabled: {err}");
+                None
+            }
+        };
+
+        let mut listener = MediaListener::new(true, last_fm);
 
         loop {
             let currently_playing = sys_media::get_current_playing_info();
@@ -157,9 +174,28 @@ fn prompted_input(prompt: &str) -> String {
     input.trim().to_owned()
 }
 
-struct PlayingSongInfo {
-    pub last_fm_info: TrackInfo,
-    pub scrobbed: bool,
+fn retry_creds(client: Agent, attempts: usize) -> Result<LastFmCreds, CredsError> {
+    let mut creds = None;
+    for _ in 0..attempts {
+        match lastfm::LastFmCreds::get_creds(client.clone()) {
+            Ok(ok_creds) => {
+                creds = Some(ok_creds);
+                break;
+            }
+            Err(err) => {
+                debug!("{err:?}");
+                if let CredsError::RetryableError(_, _) = err {
+                    thread::sleep(Duration::from_secs(1));
+                    continue;
+                } else {
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+
+    creds.ok_or(CredsError::RetryableError(-1, format!("Failed to connect to LastFM after {attempts} attempts")))
 }
 
 struct MediaListener {
@@ -169,7 +205,7 @@ struct MediaListener {
     previously_played_started: Option<SystemTime>,
     current_has_been_scrobbled: bool,
     current_song_img: String,
-    last_fm: Option<LastFm>
+    last_fm: Option<LastFm>,
 }
 
 impl MediaListener {
@@ -201,36 +237,56 @@ impl MediaListener {
 
                 self.previously_played_started = Some(SystemTime::now());
                 if let Some(ref last_fm) = self.last_fm {
-                    if let Err(err) = last_fm.now_playing(&media_info.artist_name, &media_info.song_name, Some(&media_info.album_name)) {
+                    if let Err(err) = last_fm.now_playing(
+                        &media_info.artist_name,
+                        &media_info.song_name,
+                        Some(&media_info.album_name),
+                    ) {
                         error!("{err}")
                     }
 
-                    let lf_track_info = last_fm.get_track_info(&media_info.artist_name, &media_info.song_name);
+                    let lf_track_info =
+                        last_fm.get_track_info(&media_info.artist_name, &media_info.song_name);
                     match lf_track_info {
                         Ok(track) => {
                             debug!("{track:?}");
-                            self.current_song_img = track.album.images.iter().find(|info| info.size == "large").map(|info| info.url.clone()).unwrap_or_default()
-                        },
+                            self.current_song_img = track
+                                .album
+                                .images
+                                .iter()
+                                .find(|info| info.size == "large")
+                                .map(|info| info.url.clone())
+                                .unwrap_or_default()
+                        }
                         Err(err) => {
                             error!("{err}")
                         }
                     }
-
                 }
-
             } else if let Some(ref last_fm) = self.last_fm {
-            // Try to scrobble current song
+                // Try to scrobble current song
                 let song_len = Duration::from_micros(media_info.end_time as u64);
                 let duration = Duration::from_micros(media_info.current_position as u64);
 
                 let song_len_secs = song_len.as_secs();
 
-                if song_len_secs > 30 && duration.as_secs() > song_len_secs / 2 && !self.current_has_been_scrobbled {
-                    let timestamp = self.previously_played_started.unwrap_or_else(SystemTime::now);
+                if song_len_secs > 30
+                    && duration.as_secs() > song_len_secs / 2
+                    && !self.current_has_been_scrobbled
+                {
+                    let timestamp = self
+                        .previously_played_started
+                        .unwrap_or_else(SystemTime::now);
                     // TODO: try and redo failed scrobbles
-                    match last_fm.scrobble(&media_info.artist_name, &media_info.song_name, timestamp, Some(&media_info.album_name)) {
+                    // also maybe send scrobble to separate thread
+                    match last_fm.scrobble(
+                        &media_info.artist_name,
+                        &media_info.song_name,
+                        timestamp,
+                        Some(&media_info.album_name),
+                    ) {
                         Ok(()) => self.current_has_been_scrobbled = true,
-                        Err(err) => error!("{err}")
+                        Err(err) => error!("{err}"),
                     }
                 }
             }

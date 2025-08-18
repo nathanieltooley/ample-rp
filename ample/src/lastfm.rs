@@ -22,6 +22,12 @@ pub struct LastFmCreds {
 }
 
 #[derive(Deserialize)]
+pub struct LastFmErrorResponse {
+    pub error: i64,
+    pub message: String,
+}
+
+#[derive(Deserialize)]
 struct AuthMobileSessionResponse {
     pub session: AuthMobileSessionResponseInner
 }
@@ -82,6 +88,8 @@ pub enum CredsError {
     MissingApiSecret,
     #[error("Http error: {0}")]
     Http(#[from] ureq::Error),
+    #[error("{1}")]
+    RetryableError(i64, String),
 }
 
 pub struct ScrobbleError;
@@ -229,7 +237,17 @@ impl LastFmCreds {
 
                     debug!("{body}");
                     if rep.status().is_client_error() || rep.status().is_server_error() {
-                        return Err(CredsError::Http(ureq::Error::StatusCode(rep.status().as_u16())));
+                        return match serde_json::from_str::<LastFmErrorResponse>(&body) {
+                            Ok(err) => {
+                                match err.error {
+                                    8 | 11 | 16 | 29 => {
+                                        Err(CredsError::RetryableError(err.error, err.message))
+                                    },
+                                    _ => Err(CredsError::Http(ureq::Error::StatusCode(rep.status().as_u16())))
+                                }
+                            },
+                            Err(_) => Err(CredsError::Http(ureq::Error::StatusCode(rep.status().as_u16())))
+                        }
                     }
                     
                     let json_response: AuthMobileSessionResponse = serde_json::from_str(&body).map_err(ureq::Error::Json)?;
