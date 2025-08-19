@@ -51,6 +51,20 @@ pub enum MediaError {
     Windows(windows::core::Error)
 }
 
+impl MediaError {
+    pub fn is_false_error(&self) -> bool {
+        // this should eventually be refutable when other variants are added
+        #[allow(irrefutable_let_patterns)]
+        if let MediaError::Windows(win_err) = self {
+            // NOTE: rust-analyzer thinks this is an error for some reason?
+            win_err.code() == windows_result::HRESULT(0)
+        } else {
+            false
+        }
+
+    }
+}
+
 impl From<windows::core::Error> for MediaError {
     fn from(value: windows::core::Error) -> Self {
         MediaError::Windows(value)
