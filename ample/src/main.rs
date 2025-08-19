@@ -2,7 +2,7 @@ mod lastfm;
 mod uri;
 
 use std::{
-    env, fmt::format, io::{self, Write}, thread, time::{Duration, SystemTime, UNIX_EPOCH}
+    env, io::{self, Write}, thread, time::{Duration, SystemTime, UNIX_EPOCH}
 };
 
 use discord_rich_presence::{
@@ -11,7 +11,7 @@ use discord_rich_presence::{
 };
 use log::*;
 use simplelog::*;
-use sys_media::{MediaInfo, MediaStatus};
+use sys_media::{MediaError, MediaInfo, MediaStatus};
 use ureq::{Agent, config::Config};
 
 use crate::lastfm::{CredsError, LastFm, LastFmCreds, TrackInfo};
@@ -61,7 +61,7 @@ fn main() {
 
 
     // simple arg parsing
-    for arg in args {
+    for arg in args.into_iter().skip(1) {
         if arg == "--password" || arg == "-p" {
             password_flag = true;
         } else if arg == "--secret" || arg == "-s" {
@@ -149,7 +149,11 @@ fn main() {
 
             match currently_playing {
                 Err(error) => {
-                    error!("{error}")
+                    if error.is_false_error() {
+                        info!("No media is paused or playing!");
+                    } else {
+                        error!("{error}")
+                    }
                 }
                 Ok(Some(media_info)) => {
                     listener.update_status(media_info);
@@ -236,6 +240,7 @@ impl MediaListener {
                     media_info.song_name, media_info.artist_name, media_info.album_name
                 );
 
+                self.current_has_been_scrobbled = false;
                 self.previously_played_started = Some(SystemTime::now());
                 if let Some(ref last_fm) = self.last_fm {
                     if let Err(err) = last_fm.now_playing(
@@ -320,7 +325,7 @@ impl MediaListener {
 
             if let Err(error) = self.client.set_activity(activity) {
                 error!("Error while setting activity: {error}");
-            } else {
+            } else if self.previously_played.is_none() {
                 info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name)
             }
 
