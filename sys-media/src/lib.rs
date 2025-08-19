@@ -1,6 +1,5 @@
 use core::fmt;
 
-
 mod win_media;
 pub mod consts;
 
@@ -61,7 +60,7 @@ impl From<windows::core::Error> for MediaError {
 impl fmt::Display for MediaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MediaError::Windows(error) => write!(f, "An error occuring while trying to get currently playing media: {error}") 
+            MediaError::Windows(error) => write!(f, "An error occurred while trying to get currently playing media: {error}") 
         }
     }
 }
