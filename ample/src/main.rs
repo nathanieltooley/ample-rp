@@ -133,6 +133,7 @@ fn main() {
         // TODO: make this optional
         let last_fm = match cred_attempt {
             Ok(creds) => {
+                info!("Got LastFM credentials");
                 Some(lastfm::LastFm::new(client.clone(), creds))
             },
             Err(err) => {
@@ -148,7 +149,7 @@ fn main() {
 
             match currently_playing {
                 Err(error) => {
-                    error!("Error while trying to get currently playing song: {error}")
+                    error!("{error}")
                 }
                 Ok(Some(media_info)) => {
                     listener.update_status(media_info);
@@ -249,7 +250,7 @@ impl MediaListener {
                         last_fm.get_track_info(&media_info.artist_name, &media_info.song_name);
                     match lf_track_info {
                         Ok(track) => {
-                            debug!("{track:?}");
+                            debug!("Got track info from LastFM: {track:?}");
                             self.current_song_img = track
                                 .album
                                 .images
@@ -285,8 +286,11 @@ impl MediaListener {
                         timestamp,
                         Some(&media_info.album_name),
                     ) {
-                        Ok(()) => self.current_has_been_scrobbled = true,
-                        Err(err) => error!("{err}"),
+                        Ok(()) => {
+                            info!("Song, {} by {} has been scrobbled!", media_info.song_name, media_info.artist_name);
+                            self.current_has_been_scrobbled = true
+                        },
+                        Err(err) => error!("Failed to scrobble current track: {err}"),
                     }
                 }
             }
@@ -316,6 +320,8 @@ impl MediaListener {
 
             if let Err(error) = self.client.set_activity(activity) {
                 error!("Error while setting activity: {error}");
+            } else {
+                info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name)
             }
 
             self.previously_played = Some(media_info);
