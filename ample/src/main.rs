@@ -34,8 +34,8 @@ fn main() {
     }
 
     let debug = match std::env::var("AMPLE_DEBUG") {
-        Ok(profile) => {
-            profile == "debug"
+        Ok(debug_var) => {
+            debug_var == "true"
         },
         Err(err) => panic!("{err}")
     };
