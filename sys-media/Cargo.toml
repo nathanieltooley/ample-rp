@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 windows = { version = "0.61.3", features = ["Media_Control"] }
+windows-result = "0.3.4"
