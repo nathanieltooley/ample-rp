@@ -125,24 +125,7 @@ fn main() {
     #[allow(unreachable_code)]
     #[allow(unused_variables)]
     {
-        // TODO: Generalize this code so it can be used in the service_loop function
-        let client = Agent::new_with_config(Config::builder().http_status_as_error(false).build());
-        let retry_attempts = 10;
-        let cred_attempt = retry_creds(client.clone(), retry_attempts);
-
-        // TODO: make this optional
-        let last_fm = match cred_attempt {
-            Ok(creds) => {
-                info!("Got LastFM credentials");
-                Some(lastfm::LastFm::new(client.clone(), creds))
-            },
-            Err(err) => {
-                error!("LastFM support not enabled: {err}");
-                None
-            }
-        };
-
-        let mut listener = MediaListener::new(true, last_fm);
+        let mut listener = MediaListener::new(true, get_lastfm_creds());
 
         loop {
             let currently_playing = sys_media::get_current_playing_info();
@@ -201,6 +184,23 @@ fn retry_creds(client: Agent, attempts: usize) -> Result<LastFmCreds, CredsError
 
 
     creds.ok_or(CredsError::RetryableError(-1, format!("Failed to connect to LastFM after {attempts} attempts")))
+}
+
+fn get_lastfm_creds() -> Option<LastFm> {
+        let client = Agent::new_with_config(Config::builder().http_status_as_error(false).build());
+        let retry_attempts = 10;
+        let cred_attempt = retry_creds(client.clone(), retry_attempts);
+
+        match cred_attempt {
+            Ok(creds) => {
+                info!("Got LastFM credentials");
+                Some(lastfm::LastFm::new(client.clone(), creds))
+            },
+            Err(err) => {
+                error!("LastFM support not enabled: {err}");
+                None
+            }
+        }
 }
 
 struct MediaListener {
@@ -385,7 +385,7 @@ pub mod service {
     }
 
     fn service_loop(rx: mpsc::Receiver<ThreadMessage>) {
-        let mut listener = MediaListener::new(true, None);
+        let mut listener = MediaListener::new(true, get_lastfm_creds());
         let mut paused = false;
 
         loop {
