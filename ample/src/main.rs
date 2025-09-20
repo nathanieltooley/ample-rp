@@ -2,7 +2,10 @@ mod lastfm;
 mod uri;
 
 use std::{
-    env, io::{self, Write}, thread, time::{Duration, SystemTime, UNIX_EPOCH}
+    env,
+    io::{self, Write},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use discord_rich_presence::{
@@ -34,17 +37,11 @@ fn main() {
     }
 
     let debug = match std::env::var("AMPLE_DEBUG") {
-        Ok(debug_var) => {
-            debug_var == "true"
-        },
-        Err(err) => panic!("{err}")
+        Ok(debug_var) => debug_var == "true",
+        Err(err) => panic!("{err}"),
     };
 
-    let log_level = if debug {
-        LevelFilter::Debug
-    } else {
-        LevelFilter::Info
-    };
+    let log_level = if debug { LevelFilter::Debug } else { LevelFilter::Info };
 
     SimpleLogger::init(
         log_level,
@@ -59,7 +56,6 @@ fn main() {
     let mut password_flag = false;
     let mut secret_flag = false;
 
-
     // simple arg parsing
     for arg in args.into_iter().skip(1) {
         if arg == "--password" || arg == "-p" {
@@ -73,14 +69,13 @@ fn main() {
 
     if password_flag {
         let input = prompted_input("Password: ");
-        let password_entry =
-            match keyring::Entry::new_with_target(PASSWORD_ENTRY_NAME, APP_NAME, APP_NAME) {
-                Err(err) => {
-                    error!("{err}");
-                    return;
-                }
-                Ok(entry) => entry,
-            };
+        let password_entry = match keyring::Entry::new_with_target(PASSWORD_ENTRY_NAME, APP_NAME, APP_NAME) {
+            Err(err) => {
+                error!("{err}");
+                return;
+            }
+            Ok(entry) => entry,
+        };
         match password_entry.set_password(&input) {
             Err(err) => {
                 error!("Could not set password!: {err}");
@@ -92,14 +87,13 @@ fn main() {
 
     if secret_flag {
         let input = prompted_input("API Secret: ");
-        let secret_entry =
-            match keyring::Entry::new_with_target(SECRET_ENTRY_NAME, APP_NAME, APP_NAME) {
-                Err(err) => {
-                    error!("{err}");
-                    return;
-                }
-                Ok(entry) => entry,
-            };
+        let secret_entry = match keyring::Entry::new_with_target(SECRET_ENTRY_NAME, APP_NAME, APP_NAME) {
+            Err(err) => {
+                error!("{err}");
+                return;
+            }
+            Ok(entry) => entry,
+        };
         match secret_entry.set_password(&input) {
             Err(err) => {
                 error!("Failed to set secret!: {err}");
@@ -112,7 +106,6 @@ fn main() {
     if password_flag || secret_flag {
         return;
     }
-
 
     #[cfg(feature = "win_service")]
     {
@@ -150,15 +143,11 @@ fn main() {
 }
 
 fn prompted_input(prompt: &str) -> String {
-    io::stdout()
-        .write_all(prompt.as_bytes())
-        .expect("Could not write to stdout");
+    io::stdout().write_all(prompt.as_bytes()).expect("Could not write to stdout");
     io::stdout().flush().expect("can't flush :(");
 
     let mut input = String::new();
-    io::stdin()
-        .read_line(&mut input)
-        .expect("Failed to read stdin!");
+    io::stdin().read_line(&mut input).expect("Failed to read stdin!");
     input.trim().to_owned()
 }
 
@@ -182,27 +171,31 @@ fn retry_creds(client: Agent, attempts: usize) -> Result<LastFmCreds, CredsError
         }
     }
 
-
-    creds.ok_or(CredsError::RetryableError(-1, format!("Failed to connect to LastFM after {attempts} attempts")))
+    creds.ok_or(CredsError::RetryableError(
+        -1,
+        format!("Failed to connect to LastFM after {attempts} attempts"),
+    ))
 }
 
 fn get_lastfm_creds() -> Option<LastFm> {
-        let client = Agent::new_with_config(Config::builder().http_status_as_error(false).build());
-        let retry_attempts = 10;
-        let cred_attempt = retry_creds(client.clone(), retry_attempts);
+    let client = Agent::new_with_config(Config::builder().http_status_as_error(false).build());
+    let retry_attempts = 10;
+    let cred_attempt = retry_creds(client.clone(), retry_attempts);
 
-        match cred_attempt {
-            Ok(creds) => {
-                info!("Got LastFM credentials");
-                Some(lastfm::LastFm::new(client.clone(), creds))
-            },
-            Err(err) => {
-                error!("LastFM support not enabled: {err}");
-                None
-            }
+    match cred_attempt {
+        Ok(creds) => {
+            info!("Got LastFM credentials");
+            Some(lastfm::LastFm::new(client.clone(), creds))
         }
+        Err(err) => {
+            error!("LastFM support not enabled: {err}");
+            None
+        }
+    }
 }
 
+/// A big ball of state used to keep track of previous played songs,
+/// scrobbling, and so on
 struct MediaListener {
     only_am: bool,
     client: DiscordIpcClient,
@@ -226,9 +219,10 @@ impl MediaListener {
         }
     }
 
+    /// Update discord status and attempt to scrobble. Automatically scrobbles multiple times
+    /// if it believes it has not scrobbled yet (like after a failure).
     pub fn update_status(&mut self, media_info: MediaInfo) {
-        let valid_player =
-            !self.only_am || media_info.player_name == sys_media::consts::APPLE_MUSIC_ID;
+        let valid_player = !self.only_am || media_info.player_name == sys_media::consts::APPLE_MUSIC_ID;
         if let MediaStatus::Playing = media_info.status
             && valid_player
         {
@@ -242,17 +236,16 @@ impl MediaListener {
 
                 self.current_has_been_scrobbled = false;
                 self.previously_played_started = Some(SystemTime::now());
+
+                // try to get info from LastFM if we have the creds
                 if let Some(ref last_fm) = self.last_fm {
-                    if let Err(err) = last_fm.now_playing(
-                        &media_info.artist_name,
-                        &media_info.song_name,
-                        Some(&media_info.album_name),
-                    ) {
+                    // blocking
+                    if let Err(err) = last_fm.now_playing(&media_info.artist_name, &media_info.song_name, Some(&media_info.album_name)) {
                         error!("{err}")
                     }
 
-                    let lf_track_info =
-                        last_fm.get_track_info(&media_info.artist_name, &media_info.song_name);
+                    // blocking
+                    let lf_track_info = last_fm.get_track_info(&media_info.artist_name, &media_info.song_name);
                     match lf_track_info {
                         Ok(track) => {
                             debug!("Got track info from LastFM: {track:?}");
@@ -270,43 +263,33 @@ impl MediaListener {
                     }
                 }
             } else if let Some(ref last_fm) = self.last_fm {
-                // Try to scrobble current song
+                // Try to scrobble current song if we have the creds
                 let song_len = Duration::from_micros(media_info.end_time as u64);
                 let duration = Duration::from_micros(media_info.current_position as u64);
 
                 let song_len_secs = song_len.as_secs();
 
-                if song_len_secs > 30
-                    && duration.as_secs() > song_len_secs / 2
-                    && !self.current_has_been_scrobbled
-                {
-                    let timestamp = self
-                        .previously_played_started
-                        .unwrap_or_else(SystemTime::now);
-                    // TODO: try and redo failed scrobbles
-                    // also maybe send scrobble to separate thread
-                    match last_fm.scrobble(
-                        &media_info.artist_name,
-                        &media_info.song_name,
-                        timestamp,
-                        Some(&media_info.album_name),
-                    ) {
+                // Per LastFM, scrobbles should only happen for songs longer than 30 secs and
+                // when the user has listened to atleast half of the song
+                if song_len_secs > 30 && duration.as_secs() > song_len_secs / 2 && !self.current_has_been_scrobbled {
+                    let timestamp = self.previously_played_started.unwrap_or_else(SystemTime::now);
+                    // TODO: Maybe send scrobble to separate thread.
+                    //
+                    // blocking
+                    match last_fm.scrobble(&media_info.artist_name, &media_info.song_name, timestamp, Some(&media_info.album_name)) {
                         Ok(()) => {
                             info!("Song, {} by {} has been scrobbled!", media_info.song_name, media_info.artist_name);
                             self.current_has_been_scrobbled = true
-                        },
+                        }
                         Err(err) => error!("Failed to scrobble current track: {err}"),
                     }
                 }
             }
 
             let now = SystemTime::now();
-            let dur = now
-                .duration_since(UNIX_EPOCH)
-                .expect("epoch should hopefully always be in the future");
+            let dur = now.duration_since(UNIX_EPOCH).expect("epoch should hopefully always be in the future");
 
-            let start_dur =
-                dur.saturating_sub(Duration::from_micros(media_info.current_position as u64));
+            let start_dur = dur.saturating_sub(Duration::from_micros(media_info.current_position as u64));
             let remaining_time = media_info.end_time - media_info.current_position;
             let end_dur = dur.saturating_add(Duration::from_micros(remaining_time as u64));
 
@@ -317,11 +300,7 @@ impl MediaListener {
                 .state(&state_name)
                 .activity_type(activity::ActivityType::Listening)
                 .assets(Assets::new().large_image(&self.current_song_img))
-                .timestamps(
-                    Timestamps::new()
-                        .start(start_dur.as_secs() as i64)
-                        .end(end_dur.as_secs() as i64),
-                );
+                .timestamps(Timestamps::new().start(start_dur.as_secs() as i64).end(end_dur.as_secs() as i64));
 
             if let Err(error) = self.client.set_activity(activity) {
                 error!("Error while setting activity: {error}");
@@ -367,9 +346,7 @@ pub mod service {
     use std::sync::mpsc;
     use std::sync::mpsc::RecvTimeoutError;
 
-    use windows_service::service::{
-        ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType,
-    };
+    use windows_service::service::{ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType};
     use windows_service::{define_windows_service, service_control_handler, service_dispatcher};
 
     define_windows_service!(ffi_service_main, service_main);
@@ -442,9 +419,7 @@ pub mod service {
     }
 
     fn service_main(_args: Vec<OsString>) {
-        use windows_service::{
-            service::ServiceControl, service_control_handler::ServiceControlHandlerResult,
-        };
+        use windows_service::{service::ServiceControl, service_control_handler::ServiceControlHandlerResult};
 
         let (ev_tx, ev_rx) = mpsc::channel();
 
