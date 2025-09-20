@@ -2,7 +2,8 @@ mod lastfm;
 mod uri;
 
 use std::{
-    env,
+    env::{self, VarError},
+    fs::File,
     io::{self, Write},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -38,18 +39,30 @@ fn main() {
 
     let debug = match std::env::var("AMPLE_DEBUG") {
         Ok(debug_var) => debug_var == "true",
-        Err(err) => panic!("{err}"),
+        Err(err) => match err {
+            VarError::NotPresent => false,
+            _ => panic!("{err}"),
+        },
     };
 
     let log_level = if debug { LevelFilter::Debug } else { LevelFilter::Info };
 
-    SimpleLogger::init(
-        log_level,
-        ConfigBuilder::new()
-            .set_location_level(LevelFilter::Debug)
-            .set_level_color(Level::Error, Some(Color::Red))
-            .build(),
-    )
+    CombinedLogger::init(vec![
+        TermLogger::new(
+            log_level,
+            ConfigBuilder::new()
+                .set_location_level(LevelFilter::Debug)
+                .set_level_color(Level::Error, Some(Color::Red))
+                .build(),
+            TerminalMode::Mixed,
+            ColorChoice::Auto,
+        ),
+        WriteLogger::new(
+            log_level,
+            ConfigBuilder::new().set_location_level(LevelFilter::Debug).build(),
+            File::create("ample.log").unwrap(),
+        ),
+    ])
     .unwrap();
 
     let args = env::args();
