@@ -1,9 +1,11 @@
+#![windows_subsystem = "windows"]
+
 mod lastfm;
 mod uri;
 
 use std::{
     env::{self, VarError},
-    fs::File,
+    fs::{self, DirBuilder, File},
     io::{self, Write},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -27,6 +29,13 @@ const SECRET_ENTRY_NAME: &str = "ampleSecret";
 const PASSWORD_ENTRY_NAME: &str = "amplePassword";
 const SESSION_ENTRY_NAME: &str = "ampleSession";
 
+// #[cfg(feature = "win_service")]
+// fn main() {
+//     if let Err(err) = service::run() {
+//         panic!("Error trying to start service: {err}");
+//     }
+// }
+
 fn main() {
     if let Err(err) = dotenvy::dotenv() {
         if err.not_found() {
@@ -46,24 +55,11 @@ fn main() {
     };
 
     let log_level = if debug { LevelFilter::Debug } else { LevelFilter::Info };
+    let log_file = open_log_file().unwrap();
 
-    CombinedLogger::init(vec![
-        TermLogger::new(
-            log_level,
-            ConfigBuilder::new()
-                .set_location_level(LevelFilter::Debug)
-                .set_level_color(Level::Error, Some(Color::Red))
-                .build(),
-            TerminalMode::Mixed,
-            ColorChoice::Auto,
-        ),
-        WriteLogger::new(
-            log_level,
-            ConfigBuilder::new().set_location_level(LevelFilter::Debug).build(),
-            File::create("ample.log").unwrap(),
-        ),
-    ])
-    .unwrap();
+    init_log(log_level, log_file);
+
+    debug!("inited");
 
     let args = env::args();
     let mut password_flag = false;
@@ -117,14 +113,6 @@ fn main() {
     }
 
     if password_flag || secret_flag {
-        return;
-    }
-
-    #[cfg(feature = "win_service")]
-    {
-        if let Err(err) = service::run() {
-            error!("Error trying to start service: {err}");
-        }
         return;
     }
 
@@ -207,6 +195,36 @@ fn get_lastfm_creds() -> Option<LastFm> {
     }
 }
 
+fn open_log_file() -> io::Result<File> {
+    // Should create something like "/AppData/ample/config/logs" on windows
+    // and "~/.config/ample/logs" on linux
+    let log_dir = directories::ProjectDirs::from("", "", APP_NAME)
+        .expect("valid project dir")
+        .config_dir()
+        .join("logs");
+
+    fs::create_dir_all(&log_dir)?;
+
+    // TODO: Append to end of file, not truncate file
+    File::create(log_dir.join("ample.log"))
+}
+
+fn init_log(log_level: LevelFilter, log_file: File) {
+    // only possible error is initting twice
+    let _ = CombinedLogger::init(vec![
+        TermLogger::new(
+            log_level,
+            ConfigBuilder::new()
+                .set_location_level(LevelFilter::Debug)
+                .set_level_color(Level::Error, Some(Color::Red))
+                .build(),
+            TerminalMode::Mixed,
+            ColorChoice::Auto,
+        ),
+        WriteLogger::new(log_level, ConfigBuilder::new().set_location_level(LevelFilter::Debug).build(), log_file),
+    ]);
+}
+
 /// A big ball of state used to keep track of previous played songs,
 /// scrobbling, and so on
 struct MediaListener {
@@ -262,13 +280,14 @@ impl MediaListener {
                     match lf_track_info {
                         Ok(track) => {
                             debug!("Got track info from LastFM: {track:?}");
-                            self.current_song_img = track
-                                .album
-                                .images
-                                .iter()
-                                .find(|info| info.size == "large")
-                                .map(|info| info.url.clone())
-                                .unwrap_or_default()
+                            if let Some(album) = track.album {
+                                self.current_song_img = album
+                                    .images
+                                    .iter()
+                                    .find(|info| info.size == "large")
+                                    .map(|info| info.url.clone())
+                                    .unwrap_or_default()
+                            }
                         }
                         Err(err) => {
                             error!("{err}")
@@ -351,6 +370,8 @@ fn get_client() -> DiscordIpcClient {
     client
 }
 
+// debugging and logging with services is basically impossible
+// so im not bothering with this anymore
 #[cfg(feature = "win_service")]
 pub mod service {
     use crate::*;
@@ -371,6 +392,9 @@ pub mod service {
     }
 
     pub fn run() -> windows_service::Result<()> {
+        eventlog::register("ample").unwrap();
+        eventlog::init("ample", Level::Info).unwrap();
+
         service_dispatcher::start(APP_NAME, ffi_service_main)
     }
 
@@ -421,7 +445,7 @@ pub mod service {
 
             match currently_playing {
                 Err(error) => {
-                    error!("Error while trying to get currently playing song: {error}")
+                    error!("Error while trying to get currently playing song: {error}");
                 }
                 Ok(Some(media_info)) => {
                     listener.update_status(media_info);
@@ -433,6 +457,8 @@ pub mod service {
 
     fn service_main(_args: Vec<OsString>) {
         use windows_service::{service::ServiceControl, service_control_handler::ServiceControlHandlerResult};
+
+        info!("starting ample service");
 
         let (ev_tx, ev_rx) = mpsc::channel();
 
