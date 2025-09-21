@@ -327,12 +327,15 @@ impl MediaListener {
 
             let state_name = format!("{} - {}", media_info.artist_name, media_info.album_name);
 
-            let activity = activity::Activity::new()
+            let mut activity = activity::Activity::new()
                 .details(&media_info.song_name)
                 .state(&state_name)
                 .activity_type(activity::ActivityType::Listening)
-                .assets(Assets::new().large_image(&self.current_song_img))
                 .timestamps(Timestamps::new().start(start_dur.as_secs() as i64).end(end_dur.as_secs() as i64));
+
+            if !self.current_song_img.is_empty() {
+                activity = activity.assets(Assets::new().large_image(&self.current_song_img))
+            }
 
             if let Err(error) = self.client.set_activity(activity) {
                 error!("Error while setting activity: {error}");
