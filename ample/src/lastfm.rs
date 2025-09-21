@@ -1,10 +1,14 @@
+use keyring::Entry;
 use log::debug;
 use serde::Deserialize;
 use thiserror::Error;
-use keyring::Entry;
 use ureq::Agent;
 
-use std::{collections::HashMap, env, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    collections::HashMap,
+    env,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use crate::uri;
 
@@ -29,7 +33,7 @@ pub struct LastFmErrorResponse {
 
 #[derive(Deserialize)]
 struct AuthMobileSessionResponse {
-    pub session: AuthMobileSessionResponseInner
+    pub session: AuthMobileSessionResponseInner,
 }
 
 #[derive(Deserialize)]
@@ -41,19 +45,19 @@ struct AuthMobileSessionResponseInner {
 
 #[derive(Deserialize, Debug)]
 struct TrackInfoResponse {
-    pub track: TrackInfo
+    pub track: TrackInfo,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct TrackInfo {
     pub name: String,
     pub artist: ArtistInfo,
-    pub album: AlbumInfo,
+    pub album: Option<AlbumInfo>,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct ArtistInfo {
-    pub name: String
+    pub name: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -62,7 +66,7 @@ pub struct AlbumInfo {
     pub title: String,
 
     #[serde(rename = "image")]
-    pub images: Vec<ImageInfo>
+    pub images: Vec<ImageInfo>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -72,7 +76,7 @@ pub struct ImageInfo {
     pub size: String,
 
     #[serde(rename = "#text")]
-    pub url: String
+    pub url: String,
 }
 
 #[derive(Error, Debug)]
@@ -96,10 +100,7 @@ pub struct ScrobbleError;
 
 impl LastFm {
     pub fn new(client: ureq::Agent, creds: LastFmCreds) -> LastFm {
-        LastFm {
-            client,
-            creds
-        }
+        LastFm { client, creds }
     }
 
     pub fn scrobble(&self, artist: &str, track: &str, timestamp: SystemTime, album: Option<&str>) -> Result<(), ureq::Error> {
@@ -111,11 +112,11 @@ impl LastFm {
         params.insert("timestamp", &timestamp_str);
         params.insert("api_key", &self.creds.api_key);
         params.insert("sk", &self.creds.session_token);
-        
+
         if let Some(album) = album {
             params.insert("album", album);
         }
-        
+
         let sig = create_api_sig(&params, &self.creds.api_secret);
         params.insert("format", "json");
         params.insert("api_sig", &sig);
@@ -141,11 +142,11 @@ impl LastFm {
         params.insert("track", track);
         params.insert("api_key", &self.creds.api_key);
         params.insert("sk", &self.creds.session_token);
-        
+
         if let Some(album) = album {
             params.insert("album", album);
         }
-        
+
         let sig = create_api_sig(&params, &self.creds.api_secret);
         params.insert("format", "json");
         params.insert("api_sig", &sig);
@@ -197,20 +198,16 @@ impl LastFmCreds {
 
         let password_entry = Entry::new_with_target(crate::PASSWORD_ENTRY_NAME, crate::APP_NAME, crate::APP_NAME)?;
         let secret_entry = Entry::new_with_target(crate::SECRET_ENTRY_NAME, crate::APP_NAME, crate::APP_NAME)?;
-        
-        let password = password_entry.get_password().map_err(|kr_err| {
-            match kr_err {
-                keyring::Error::NoEntry => CredsError::MissingPassword, 
-                _ => CredsError::Keyring(kr_err)
-            }
+
+        let password = password_entry.get_password().map_err(|kr_err| match kr_err {
+            keyring::Error::NoEntry => CredsError::MissingPassword,
+            _ => CredsError::Keyring(kr_err),
         })?;
-        let secret = secret_entry.get_password().map_err(|kr_err| {
-            match kr_err {
-                keyring::Error::NoEntry => CredsError::MissingApiSecret,
-                _ => CredsError::Keyring(kr_err)
-            }
+        let secret = secret_entry.get_password().map_err(|kr_err| match kr_err {
+            keyring::Error::NoEntry => CredsError::MissingApiSecret,
+            _ => CredsError::Keyring(kr_err),
         })?;
-        
+
         let session_entry = Entry::new_with_target(crate::SESSION_ENTRY_NAME, crate::APP_NAME, crate::APP_NAME)?;
         let session_token = match session_entry.get_password() {
             Err(err) => {
@@ -229,27 +226,21 @@ impl LastFmCreds {
                     debug!("sig: {sig}");
                     debug!("uri: {API_ROOT}");
 
-                    let mut rep = client
-                        .post(API_ROOT)
-                        .send_form(map_params)?;
+                    let mut rep = client.post(API_ROOT).send_form(map_params)?;
 
                     let body = rep.body_mut().read_to_string()?;
 
                     debug!("{body}");
                     if rep.status().is_client_error() || rep.status().is_server_error() {
                         return match serde_json::from_str::<LastFmErrorResponse>(&body) {
-                            Ok(err) => {
-                                match err.error {
-                                    8 | 11 | 16 | 29 => {
-                                        Err(CredsError::RetryableError(err.error, err.message))
-                                    },
-                                    _ => Err(CredsError::Http(ureq::Error::StatusCode(rep.status().as_u16())))
-                                }
+                            Ok(err) => match err.error {
+                                8 | 11 | 16 | 29 => Err(CredsError::RetryableError(err.error, err.message)),
+                                _ => Err(CredsError::Http(ureq::Error::StatusCode(rep.status().as_u16()))),
                             },
-                            Err(_) => Err(CredsError::Http(ureq::Error::StatusCode(rep.status().as_u16())))
-                        }
+                            Err(_) => Err(CredsError::Http(ureq::Error::StatusCode(rep.status().as_u16()))),
+                        };
                     }
-                    
+
                     let json_response: AuthMobileSessionResponse = serde_json::from_str(&body).map_err(ureq::Error::Json)?;
                     let key = json_response.session.key;
 
@@ -260,21 +251,22 @@ impl LastFmCreds {
                     return Err(CredsError::Keyring(err));
                 }
             }
-            Ok(sess) => sess
+            Ok(sess) => sess,
         };
 
-
-        Ok(LastFmCreds {api_key, api_secret: secret, session_token})
+        Ok(LastFmCreds {
+            api_key,
+            api_secret: secret,
+            session_token,
+        })
     }
 }
 
 /// Creates an MD5 hash needed to sign API requests.
 fn create_api_sig(params: &HashMap<&str, &str>, secret: &str) -> String {
     let mut unhashed_api_string = String::new();
-    let mut sorted_params: Vec<(&&str, &&str)>  = params.iter().collect();
-    sorted_params.sort_by(|a, b| {
-        a.0.cmp(b.0)
-    });
+    let mut sorted_params: Vec<(&&str, &&str)> = params.iter().collect();
+    sorted_params.sort_by(|a, b| a.0.cmp(b.0));
 
     for (name, value) in sorted_params {
         unhashed_api_string.push_str(name);
@@ -296,9 +288,7 @@ fn create_api_sig(params: &HashMap<&str, &str>, secret: &str) -> String {
 fn create_param_uri(params: &HashMap<&str, &str>, sig: Option<String>) -> String {
     let mut uri = format!("{API_ROOT}/?");
     let mut params: Vec<(&&str, &&str)> = params.iter().collect();
-    params.sort_by(|a, b| {
-        a.0.cmp(b.0)
-    });
+    params.sort_by(|a, b| a.0.cmp(b.0));
     for (i, (name, value)) in params.into_iter().enumerate() {
         if i != 0 {
             uri.push('&');
@@ -319,7 +309,6 @@ fn create_param_uri(params: &HashMap<&str, &str>, sig: Option<String>) -> String
 
     uri
 }
-
 
 #[cfg(test)]
 mod tests {
