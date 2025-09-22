@@ -1,5 +1,4 @@
-#![windows_subsystem = "windows"]
-
+#![cfg_attr(feature = "headless", windows_subsystem = "windows")]
 mod lastfm;
 mod uri;
 
