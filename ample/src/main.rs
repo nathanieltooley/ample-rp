@@ -5,7 +5,12 @@ mod uri;
 use std::{
     env::{self, VarError},
     fs::{self, DirBuilder, File},
+    future,
     io::{self, Write},
+    sync::{
+        self, Arc, Mutex,
+        mpsc::{channel, sync_channel},
+    },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -19,7 +24,7 @@ use simplelog::*;
 use sys_media::{MediaError, MediaInfo, MediaStatus};
 use ureq::{Agent, config::Config};
 
-use crate::lastfm::{CredsError, LastFm, LastFmCreds, TrackInfo};
+use crate::lastfm::{AlbumInfo, CredsError, LastFm, LastFmCreds, TrackInfo};
 
 const AMPLE_DPRC_ID: u64 = 1399214780564246670;
 const TICK_TIME: Duration = Duration::from_secs(5);
@@ -120,9 +125,67 @@ fn main() {
     let mut previously_played: Option<MediaInfo> = None;
     let mut previously_played_started: Option<SystemTime> = None;
     let mut current_has_been_scrobbled = false;
-    let mut current_song_img = String::new();
+
+    let current_song_img = Arc::new(Mutex::new(String::new()));
+    let (last_fm_tx, last_fm_rx) = crossbeam::channel::unbounded::<LastFmThreadMessage>();
 
     let last_fm = get_lastfm_creds();
+    if let Some(ref l) = last_fm {
+        let inner_last_fm = l.clone();
+        let current_song_img = current_song_img.clone();
+        thread::spawn(move || {
+            loop {
+                let result = last_fm_rx.recv();
+                match result {
+                    Ok(msg) => match msg {
+                        LastFmThreadMessage::NowPlaying(info) => {
+                            if let Err(err) = inner_last_fm.now_playing(&info.artist_name, &info.song_name, Some(&info.album_name)) {
+                                error!("{err}")
+                            }
+                        }
+                        LastFmThreadMessage::AlbumImg(info) => {
+                            let lf_track_info = inner_last_fm.get_track_info(&info.artist_name, &info.song_name);
+                            match lf_track_info {
+                                Ok(track) => {
+                                    debug!("Got track info from LastFM: {track:?}");
+                                    if let Some(album) = track.album {
+                                        let song_img = album
+                                            .images
+                                            .iter()
+                                            .find(|info| info.size == "large")
+                                            .map(|info| info.url.clone())
+                                            .unwrap_or_default();
+
+                                        if !song_img.is_empty() {
+                                            let mut lock = current_song_img.lock().expect("Main thread panicked!");
+                                            info!("Got album cover url: {}", &song_img);
+
+                                            *lock = song_img;
+                                        }
+                                    }
+                                }
+                                Err(err) => {
+                                    error!("{err}")
+                                }
+                            }
+                        }
+                        LastFmThreadMessage::Scrobble(info, timestamp) => {
+                            match inner_last_fm.scrobble(&info.artist_name, &info.song_name, timestamp, Some(&info.album_name)) {
+                                Ok(()) => {
+                                    info!("Song, {} by {} has been scrobbled!", info.song_name, info.artist_name);
+                                }
+                                Err(err) => error!("Failed to scrobble current track: {err}"),
+                            }
+                        }
+                    },
+                    Err(err) => {
+                        error!("Error trying to read from channel: {err}");
+                        return;
+                    }
+                }
+            }
+        });
+    }
 
     loop {
         let currently_playing = sys_media::get_current_playing_info();
@@ -152,32 +215,18 @@ fn main() {
                         previously_played_started = Some(SystemTime::now());
 
                         // try to get info from LastFM if we have the creds
-                        if let Some(ref last_fm) = last_fm {
-                            // blocking
-                            if let Err(err) = last_fm.now_playing(&media_info.artist_name, &media_info.song_name, Some(&media_info.album_name)) {
-                                error!("{err}")
+                        if last_fm.is_some() {
+                            let send_err = last_fm_tx.send(LastFmThreadMessage::NowPlaying(media_info.clone()));
+                            if let Err(err) = send_err {
+                                error!("Cannot send to LastFM thread: {err}");
                             }
 
-                            // blocking
-                            let lf_track_info = last_fm.get_track_info(&media_info.artist_name, &media_info.song_name);
-                            match lf_track_info {
-                                Ok(track) => {
-                                    debug!("Got track info from LastFM: {track:?}");
-                                    if let Some(album) = track.album {
-                                        current_song_img = album
-                                            .images
-                                            .iter()
-                                            .find(|info| info.size == "large")
-                                            .map(|info| info.url.clone())
-                                            .unwrap_or_default()
-                                    }
-                                }
-                                Err(err) => {
-                                    error!("{err}")
-                                }
+                            let send_err = last_fm_tx.send(LastFmThreadMessage::AlbumImg(media_info.clone()));
+                            if let Err(err) = send_err {
+                                error!("Cannot send to LastFM thread: {err}");
                             }
                         }
-                    } else if let Some(ref last_fm) = last_fm {
+                    } else if last_fm.is_some() {
                         // Try to scrobble current song if we have the creds
                         let song_len = Duration::from_micros(media_info.end_time as u64);
                         let duration = Duration::from_micros(media_info.current_position as u64);
@@ -188,15 +237,9 @@ fn main() {
                         // when the user has listened to atleast half of the song
                         if song_len_secs > 30 && duration.as_secs() > song_len_secs / 2 && !current_has_been_scrobbled {
                             let timestamp = previously_played_started.unwrap_or_else(SystemTime::now);
-                            // TODO: Maybe send scrobble to separate thread.
-                            //
-                            // blocking
-                            match last_fm.scrobble(&media_info.artist_name, &media_info.song_name, timestamp, Some(&media_info.album_name)) {
-                                Ok(()) => {
-                                    info!("Song, {} by {} has been scrobbled!", media_info.song_name, media_info.artist_name);
-                                    current_has_been_scrobbled = true
-                                }
-                                Err(err) => error!("Failed to scrobble current track: {err}"),
+                            match last_fm_tx.send(LastFmThreadMessage::Scrobble(media_info.clone(), timestamp)) {
+                                Ok(()) => current_has_been_scrobbled = true,
+                                Err(err) => error!("Cannot send to LastFM thread: {err}"),
                             }
                         }
                     }
@@ -216,8 +259,15 @@ fn main() {
                         .activity_type(activity::ActivityType::Listening)
                         .timestamps(Timestamps::new().start(start_dur.as_secs() as i64).end(end_dur.as_secs() as i64));
 
-                    if !current_song_img.is_empty() {
-                        activity = activity.assets(Assets::new().large_image(&current_song_img))
+                    #[allow(unused_assignments)]
+                    let mut cover_url = String::new();
+                    {
+                        let song_img_handle = current_song_img.lock().expect("LastFM thread panicked!");
+                        cover_url = song_img_handle.clone();
+                    }
+
+                    if !cover_url.is_empty() {
+                        activity = activity.assets(Assets::new().large_image(&cover_url))
                     }
 
                     if let Err(error) = client.set_activity(activity) {
@@ -237,6 +287,12 @@ fn main() {
 
         thread::sleep(TICK_TIME);
     }
+}
+
+enum LastFmThreadMessage {
+    Scrobble(MediaInfo, SystemTime),
+    NowPlaying(MediaInfo),
+    AlbumImg(MediaInfo),
 }
 
 fn clear_status(client: &mut DiscordIpcClient) {
@@ -325,32 +381,6 @@ fn init_log(log_level: LevelFilter, log_file: File) {
         ),
         WriteLogger::new(log_level, ConfigBuilder::new().set_location_level(LevelFilter::Debug).build(), log_file),
     ]);
-}
-
-/// A big ball of state used to keep track of previous played songs,
-/// scrobbling, and so on
-struct MediaListener {
-    only_am: bool,
-    client: DiscordIpcClient,
-    previously_played: Option<MediaInfo>,
-    previously_played_started: Option<SystemTime>,
-    current_has_been_scrobbled: bool,
-    current_song_img: String,
-    last_fm: Option<LastFm>,
-}
-
-impl MediaListener {
-    pub fn new(only_am: bool, last_fm: Option<LastFm>) -> MediaListener {
-        MediaListener {
-            only_am,
-            client: get_client(),
-            previously_played: None,
-            current_song_img: String::new(),
-            previously_played_started: None,
-            current_has_been_scrobbled: false,
-            last_fm,
-        }
-    }
 }
 
 fn get_client() -> DiscordIpcClient {

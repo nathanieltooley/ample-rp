@@ -14,11 +14,13 @@ use crate::uri;
 
 const API_ROOT: &str = "https://ws.audioscrobbler.com/2.0";
 
+#[derive(Debug, Clone)]
 pub struct LastFm {
     client: ureq::Agent,
     creds: LastFmCreds,
 }
 
+#[derive(Debug, Clone)]
 pub struct LastFmCreds {
     pub api_key: String,
     pub api_secret: String,
