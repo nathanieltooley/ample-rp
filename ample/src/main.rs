@@ -115,30 +115,133 @@ fn main() {
         return;
     }
 
-    #[allow(unreachable_code)]
-    #[allow(unused_variables)]
-    {
-        let mut listener = MediaListener::new(true, get_lastfm_creds());
+    let only_am = true;
+    let mut client = get_client();
+    let mut previously_played: Option<MediaInfo> = None;
+    let mut previously_played_started: Option<SystemTime> = None;
+    let mut current_has_been_scrobbled = false;
+    let mut current_song_img = String::new();
 
-        loop {
-            let currently_playing = sys_media::get_current_playing_info();
+    let last_fm = get_lastfm_creds();
 
-            match currently_playing {
-                Err(error) => {
-                    if error.is_false_error() {
-                        info!("No media is paused or playing!");
-                    } else {
-                        error!("{error}")
-                    }
+    loop {
+        let currently_playing = sys_media::get_current_playing_info();
+
+        match currently_playing {
+            Err(error) => {
+                if error.is_false_error() {
+                    info!("No media is paused or playing!");
+                } else {
+                    error!("{error}")
                 }
-                Ok(Some(media_info)) => {
-                    listener.update_status(media_info);
-                }
-                _ => {}
             }
+            Ok(Some(media_info)) => {
+                let valid_player = !only_am || media_info.player_name == sys_media::consts::APPLE_MUSIC_ID;
+                if let MediaStatus::Playing = media_info.status
+                    && valid_player
+                {
+                    // New song
+                    if previously_played.as_ref() != Some(&media_info) {
+                        info!("App currently playing media: {}", media_info.player_name);
+                        info!(
+                            "Currently Playing: {} by {} on {}",
+                            media_info.song_name, media_info.artist_name, media_info.album_name
+                        );
 
-            thread::sleep(TICK_TIME);
+                        current_has_been_scrobbled = false;
+                        previously_played_started = Some(SystemTime::now());
+
+                        // try to get info from LastFM if we have the creds
+                        if let Some(ref last_fm) = last_fm {
+                            // blocking
+                            if let Err(err) = last_fm.now_playing(&media_info.artist_name, &media_info.song_name, Some(&media_info.album_name)) {
+                                error!("{err}")
+                            }
+
+                            // blocking
+                            let lf_track_info = last_fm.get_track_info(&media_info.artist_name, &media_info.song_name);
+                            match lf_track_info {
+                                Ok(track) => {
+                                    debug!("Got track info from LastFM: {track:?}");
+                                    if let Some(album) = track.album {
+                                        current_song_img = album
+                                            .images
+                                            .iter()
+                                            .find(|info| info.size == "large")
+                                            .map(|info| info.url.clone())
+                                            .unwrap_or_default()
+                                    }
+                                }
+                                Err(err) => {
+                                    error!("{err}")
+                                }
+                            }
+                        }
+                    } else if let Some(ref last_fm) = last_fm {
+                        // Try to scrobble current song if we have the creds
+                        let song_len = Duration::from_micros(media_info.end_time as u64);
+                        let duration = Duration::from_micros(media_info.current_position as u64);
+
+                        let song_len_secs = song_len.as_secs();
+
+                        // Per LastFM, scrobbles should only happen for songs longer than 30 secs and
+                        // when the user has listened to atleast half of the song
+                        if song_len_secs > 30 && duration.as_secs() > song_len_secs / 2 && !current_has_been_scrobbled {
+                            let timestamp = previously_played_started.unwrap_or_else(SystemTime::now);
+                            // TODO: Maybe send scrobble to separate thread.
+                            //
+                            // blocking
+                            match last_fm.scrobble(&media_info.artist_name, &media_info.song_name, timestamp, Some(&media_info.album_name)) {
+                                Ok(()) => {
+                                    info!("Song, {} by {} has been scrobbled!", media_info.song_name, media_info.artist_name);
+                                    current_has_been_scrobbled = true
+                                }
+                                Err(err) => error!("Failed to scrobble current track: {err}"),
+                            }
+                        }
+                    }
+
+                    let now = SystemTime::now();
+                    let dur = now.duration_since(UNIX_EPOCH).expect("epoch should hopefully always be in the future");
+
+                    let start_dur = dur.saturating_sub(Duration::from_micros(media_info.current_position as u64));
+                    let remaining_time = media_info.end_time - media_info.current_position;
+                    let end_dur = dur.saturating_add(Duration::from_micros(remaining_time as u64));
+
+                    let state_name = format!("{} - {}", media_info.artist_name, media_info.album_name);
+
+                    let mut activity = activity::Activity::new()
+                        .details(&media_info.song_name)
+                        .state(&state_name)
+                        .activity_type(activity::ActivityType::Listening)
+                        .timestamps(Timestamps::new().start(start_dur.as_secs() as i64).end(end_dur.as_secs() as i64));
+
+                    if !current_song_img.is_empty() {
+                        activity = activity.assets(Assets::new().large_image(&current_song_img))
+                    }
+
+                    if let Err(error) = client.set_activity(activity) {
+                        error!("Error while setting activity: {error}");
+                    } else if previously_played.is_none() {
+                        info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name)
+                    }
+
+                    previously_played = Some(media_info);
+                } else {
+                    debug!("Media is paused. Clearing activity");
+                    clear_status(&mut client);
+                }
+            }
+            _ => {}
         }
+
+        thread::sleep(TICK_TIME);
+    }
+}
+
+fn clear_status(client: &mut DiscordIpcClient) {
+    if let Err(err) = client.clear_activity() {
+        error!("Error while clearing activity: {err}");
     }
 }
 
@@ -247,119 +350,6 @@ impl MediaListener {
             current_has_been_scrobbled: false,
             last_fm,
         }
-    }
-
-    /// Update discord status and attempt to scrobble. Automatically scrobbles multiple times
-    /// if it believes it has not scrobbled yet (like after a failure).
-    pub fn update_status(&mut self, media_info: MediaInfo) {
-        let valid_player = !self.only_am || media_info.player_name == sys_media::consts::APPLE_MUSIC_ID;
-        if let MediaStatus::Playing = media_info.status
-            && valid_player
-        {
-            // New song
-            if self.previously_played.as_ref() != Some(&media_info) {
-                info!("App currently playing media: {}", media_info.player_name);
-                info!(
-                    "Currently Playing: {} by {} on {}",
-                    media_info.song_name, media_info.artist_name, media_info.album_name
-                );
-
-                self.current_has_been_scrobbled = false;
-                self.previously_played_started = Some(SystemTime::now());
-
-                // try to get info from LastFM if we have the creds
-                if let Some(ref last_fm) = self.last_fm {
-                    // blocking
-                    if let Err(err) = last_fm.now_playing(&media_info.artist_name, &media_info.song_name, Some(&media_info.album_name)) {
-                        error!("{err}")
-                    }
-
-                    // blocking
-                    let lf_track_info = last_fm.get_track_info(&media_info.artist_name, &media_info.song_name);
-                    match lf_track_info {
-                        Ok(track) => {
-                            debug!("Got track info from LastFM: {track:?}");
-                            if let Some(album) = track.album {
-                                self.current_song_img = album
-                                    .images
-                                    .iter()
-                                    .find(|info| info.size == "large")
-                                    .map(|info| info.url.clone())
-                                    .unwrap_or_default()
-                            }
-                        }
-                        Err(err) => {
-                            error!("{err}")
-                        }
-                    }
-                }
-            } else if let Some(ref last_fm) = self.last_fm {
-                // Try to scrobble current song if we have the creds
-                let song_len = Duration::from_micros(media_info.end_time as u64);
-                let duration = Duration::from_micros(media_info.current_position as u64);
-
-                let song_len_secs = song_len.as_secs();
-
-                // Per LastFM, scrobbles should only happen for songs longer than 30 secs and
-                // when the user has listened to atleast half of the song
-                if song_len_secs > 30 && duration.as_secs() > song_len_secs / 2 && !self.current_has_been_scrobbled {
-                    let timestamp = self.previously_played_started.unwrap_or_else(SystemTime::now);
-                    // TODO: Maybe send scrobble to separate thread.
-                    //
-                    // blocking
-                    match last_fm.scrobble(&media_info.artist_name, &media_info.song_name, timestamp, Some(&media_info.album_name)) {
-                        Ok(()) => {
-                            info!("Song, {} by {} has been scrobbled!", media_info.song_name, media_info.artist_name);
-                            self.current_has_been_scrobbled = true
-                        }
-                        Err(err) => error!("Failed to scrobble current track: {err}"),
-                    }
-                }
-            }
-
-            let now = SystemTime::now();
-            let dur = now.duration_since(UNIX_EPOCH).expect("epoch should hopefully always be in the future");
-
-            let start_dur = dur.saturating_sub(Duration::from_micros(media_info.current_position as u64));
-            let remaining_time = media_info.end_time - media_info.current_position;
-            let end_dur = dur.saturating_add(Duration::from_micros(remaining_time as u64));
-
-            let state_name = format!("{} - {}", media_info.artist_name, media_info.album_name);
-
-            let mut activity = activity::Activity::new()
-                .details(&media_info.song_name)
-                .state(&state_name)
-                .activity_type(activity::ActivityType::Listening)
-                .timestamps(Timestamps::new().start(start_dur.as_secs() as i64).end(end_dur.as_secs() as i64));
-
-            if !self.current_song_img.is_empty() {
-                activity = activity.assets(Assets::new().large_image(&self.current_song_img))
-            }
-
-            if let Err(error) = self.client.set_activity(activity) {
-                error!("Error while setting activity: {error}");
-            } else if self.previously_played.is_none() {
-                info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name)
-            }
-
-            self.previously_played = Some(media_info);
-        } else {
-            debug!("Media is paused. Clearing activity");
-            self.clear_status();
-        }
-    }
-
-    pub fn clear_status(&mut self) {
-        if let Err(err) = self.client.clear_activity() {
-            error!("Error while clearing activity: {err}");
-        }
-    }
-}
-
-// doesn't seem necessary but just in case
-impl Drop for MediaListener {
-    fn drop(&mut self) {
-        self.clear_status();
     }
 }
 
