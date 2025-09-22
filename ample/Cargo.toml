@@ -20,5 +20,5 @@ eventlog = { version = "0.3.0", optional = true }
 windows-service = { version = "0.8.0", optional = true }
 
 [features]
-win_service = ["windows-service", "eventlog"]
+# win_service = ["windows-service", "eventlog"]
 headless = []

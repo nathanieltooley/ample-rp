@@ -374,148 +374,148 @@ fn get_client() -> DiscordIpcClient {
 
 // debugging and logging with services is basically impossible
 // so im not bothering with this anymore
-#[cfg(feature = "win_service")]
-pub mod service {
-    use crate::*;
+// #[cfg(feature = "win_service")]
+// pub mod service {
+//     use crate::*;
 
-    use std::ffi::OsString;
-    use std::sync::mpsc;
-    use std::sync::mpsc::RecvTimeoutError;
+//     use std::ffi::OsString;
+//     use std::sync::mpsc;
+//     use std::sync::mpsc::RecvTimeoutError;
 
-    use windows_service::service::{ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType};
-    use windows_service::{define_windows_service, service_control_handler, service_dispatcher};
+//     use windows_service::service::{ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType};
+//     use windows_service::{define_windows_service, service_control_handler, service_dispatcher};
 
-    define_windows_service!(ffi_service_main, service_main);
+//     define_windows_service!(ffi_service_main, service_main);
 
-    enum ThreadMessage {
-        Pause,
-        Continue,
-        Stop,
-    }
+//     enum ThreadMessage {
+//         Pause,
+//         Continue,
+//         Stop,
+//     }
 
-    pub fn run() -> windows_service::Result<()> {
-        eventlog::register("ample").unwrap();
-        eventlog::init("ample", Level::Info).unwrap();
+//     pub fn run() -> windows_service::Result<()> {
+//         eventlog::register("ample").unwrap();
+//         eventlog::init("ample", Level::Info).unwrap();
 
-        service_dispatcher::start(APP_NAME, ffi_service_main)
-    }
+//         service_dispatcher::start(APP_NAME, ffi_service_main)
+//     }
 
-    fn service_loop(rx: mpsc::Receiver<ThreadMessage>) {
-        let mut listener = MediaListener::new(true, get_lastfm_creds());
-        let mut paused = false;
+//     fn service_loop(rx: mpsc::Receiver<ThreadMessage>) {
+//         let mut listener = MediaListener::new(true, get_lastfm_creds());
+//         let mut paused = false;
 
-        loop {
-            if paused {
-                listener.clear_status();
+//         loop {
+//             if paused {
+//                 listener.clear_status();
 
-                // block until we receive since we need to wait for a Continue message anyway
-                match rx.recv() {
-                    Err(_) => {
-                        error!("Event handler channel disconnected!");
-                        return;
-                    }
-                    Ok(msg) => match msg {
-                        ThreadMessage::Continue => paused = false,
-                        ThreadMessage::Stop => return,
-                        ThreadMessage::Pause => unreachable!(),
-                    },
-                }
-            } else {
-                match rx.recv_timeout(TICK_TIME) {
-                    Ok(msg) => match msg {
-                        ThreadMessage::Continue => unreachable!(),
-                        ThreadMessage::Stop => return,
-                        ThreadMessage::Pause => {
-                            paused = true;
-                            continue;
-                        }
-                    },
-                    Err(err) => {
-                        match err {
-                            // Timeout here is the happy path
-                            RecvTimeoutError::Timeout => {}
-                            RecvTimeoutError::Disconnected => {
-                                error!("Event handler channel disconnected!");
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
+//                 // block until we receive since we need to wait for a Continue message anyway
+//                 match rx.recv() {
+//                     Err(_) => {
+//                         error!("Event handler channel disconnected!");
+//                         return;
+//                     }
+//                     Ok(msg) => match msg {
+//                         ThreadMessage::Continue => paused = false,
+//                         ThreadMessage::Stop => return,
+//                         ThreadMessage::Pause => unreachable!(),
+//                     },
+//                 }
+//             } else {
+//                 match rx.recv_timeout(TICK_TIME) {
+//                     Ok(msg) => match msg {
+//                         ThreadMessage::Continue => unreachable!(),
+//                         ThreadMessage::Stop => return,
+//                         ThreadMessage::Pause => {
+//                             paused = true;
+//                             continue;
+//                         }
+//                     },
+//                     Err(err) => {
+//                         match err {
+//                             // Timeout here is the happy path
+//                             RecvTimeoutError::Timeout => {}
+//                             RecvTimeoutError::Disconnected => {
+//                                 error!("Event handler channel disconnected!");
+//                                 return;
+//                             }
+//                         }
+//                     }
+//                 }
+//             }
 
-            let currently_playing = sys_media::get_current_playing_info();
+//             let currently_playing = sys_media::get_current_playing_info();
 
-            match currently_playing {
-                Err(error) => {
-                    error!("Error while trying to get currently playing song: {error}");
-                }
-                Ok(Some(media_info)) => {
-                    listener.update_status(media_info);
-                }
-                _ => {}
-            }
-        }
-    }
+//             match currently_playing {
+//                 Err(error) => {
+//                     error!("Error while trying to get currently playing song: {error}");
+//                 }
+//                 Ok(Some(media_info)) => {
+//                     listener.update_status(media_info);
+//                 }
+//                 _ => {}
+//             }
+//         }
+//     }
 
-    fn service_main(_args: Vec<OsString>) {
-        use windows_service::{service::ServiceControl, service_control_handler::ServiceControlHandlerResult};
+//     fn service_main(_args: Vec<OsString>) {
+//         use windows_service::{service::ServiceControl, service_control_handler::ServiceControlHandlerResult};
 
-        info!("starting ample service");
+//         info!("starting ample service");
 
-        let (ev_tx, ev_rx) = mpsc::channel();
+//         let (ev_tx, ev_rx) = mpsc::channel();
 
-        let event_handler = move |ctl_event: ServiceControl| -> ServiceControlHandlerResult {
-            match ctl_event {
-                ServiceControl::Stop => {
-                    ev_tx.send(ThreadMessage::Stop).unwrap();
-                    ServiceControlHandlerResult::NoError
-                }
-                ServiceControl::Continue => {
-                    ev_tx.send(ThreadMessage::Continue).unwrap();
-                    ServiceControlHandlerResult::NoError
-                }
-                ServiceControl::Pause => {
-                    ev_tx.send(ThreadMessage::Pause).unwrap();
-                    ServiceControlHandlerResult::NoError
-                }
-                ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
-                _ => ServiceControlHandlerResult::NotImplemented,
-            }
-        };
+//         let event_handler = move |ctl_event: ServiceControl| -> ServiceControlHandlerResult {
+//             match ctl_event {
+//                 ServiceControl::Stop => {
+//                     ev_tx.send(ThreadMessage::Stop).unwrap();
+//                     ServiceControlHandlerResult::NoError
+//                 }
+//                 ServiceControl::Continue => {
+//                     ev_tx.send(ThreadMessage::Continue).unwrap();
+//                     ServiceControlHandlerResult::NoError
+//                 }
+//                 ServiceControl::Pause => {
+//                     ev_tx.send(ThreadMessage::Pause).unwrap();
+//                     ServiceControlHandlerResult::NoError
+//                 }
+//                 ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
+//                 _ => ServiceControlHandlerResult::NotImplemented,
+//             }
+//         };
 
-        let service_handle = match service_control_handler::register(APP_NAME, event_handler) {
-            Ok(handle) => handle,
-            Err(err) => {
-                error!("Error trying to setup up service control handler: {err}");
-                return;
-            }
-        };
+//         let service_handle = match service_control_handler::register(APP_NAME, event_handler) {
+//             Ok(handle) => handle,
+//             Err(err) => {
+//                 error!("Error trying to setup up service control handler: {err}");
+//                 return;
+//             }
+//         };
 
-        if let Err(err) = service_handle.set_service_status(ServiceStatus {
-            service_type: ServiceType::OWN_PROCESS,
-            current_state: ServiceState::Running,
-            controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::PAUSE_CONTINUE,
-            exit_code: ServiceExitCode::Win32(0),
-            wait_hint: Duration::default(),
-            process_id: None,
-            checkpoint: 0,
-        }) {
-            error!("Error trying to set service status: {err}");
-            return;
-        }
+//         if let Err(err) = service_handle.set_service_status(ServiceStatus {
+//             service_type: ServiceType::OWN_PROCESS,
+//             current_state: ServiceState::Running,
+//             controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::PAUSE_CONTINUE,
+//             exit_code: ServiceExitCode::Win32(0),
+//             wait_hint: Duration::default(),
+//             process_id: None,
+//             checkpoint: 0,
+//         }) {
+//             error!("Error trying to set service status: {err}");
+//             return;
+//         }
 
-        service_loop(ev_rx);
+//         service_loop(ev_rx);
 
-        if let Err(err) = service_handle.set_service_status(ServiceStatus {
-            service_type: ServiceType::OWN_PROCESS,
-            current_state: ServiceState::Stopped,
-            controls_accepted: ServiceControlAccept::empty(),
-            exit_code: ServiceExitCode::Win32(0),
-            checkpoint: 0,
-            wait_hint: Duration::default(),
-            process_id: None,
-        }) {
-            error!("Error trying to stop service: {err}")
-        }
-    }
-}
+//         if let Err(err) = service_handle.set_service_status(ServiceStatus {
+//             service_type: ServiceType::OWN_PROCESS,
+//             current_state: ServiceState::Stopped,
+//             controls_accepted: ServiceControlAccept::empty(),
+//             exit_code: ServiceExitCode::Win32(0),
+//             checkpoint: 0,
+//             wait_hint: Duration::default(),
+//             process_id: None,
+//         }) {
+//             error!("Error trying to stop service: {err}")
+//         }
+//     }
+// }
