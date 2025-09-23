@@ -4,6 +4,7 @@ mod uri;
 
 use std::{
     env::{self, VarError},
+    error::Error,
     fs::{self, DirBuilder, File},
     future,
     io::{self, Write},
@@ -15,6 +16,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use crossbeam::select;
 use discord_rich_presence::{
     activity::{Assets, Timestamps},
     *,
@@ -126,21 +128,22 @@ fn main() {
     let mut previously_played_started: Option<SystemTime> = None;
     let mut current_has_been_scrobbled = false;
 
-    let current_song_img = Arc::new(Mutex::new(String::new()));
+    let mut current_song_img = String::new();
     let (last_fm_tx, last_fm_rx) = crossbeam::channel::unbounded::<LastFmThreadMessage>();
+    let (song_img_tx, song_img_rx) = crossbeam::channel::unbounded::<String>();
 
     let last_fm = get_lastfm_creds();
     if let Some(ref l) = last_fm {
         let inner_last_fm = l.clone();
-        let current_song_img = current_song_img.clone();
         thread::spawn(move || {
             loop {
                 let result = last_fm_rx.recv();
                 match result {
                     Ok(msg) => match msg {
                         LastFmThreadMessage::NowPlaying(info) => {
-                            if let Err(err) = inner_last_fm.now_playing(&info.artist_name, &info.song_name, Some(&info.album_name)) {
-                                error!("{err}")
+                            match inner_last_fm.now_playing(&info.artist_name, &info.song_name, Some(&info.album_name)) {
+                                Err(err) => error!("{err}"),
+                                Ok(_) => info!("LastFM Now Playing: {} - {}", info.song_name, info.artist_name),
                             }
                         }
                         LastFmThreadMessage::AlbumImg(info) => {
@@ -157,10 +160,10 @@ fn main() {
                                             .unwrap_or_default();
 
                                         if !song_img.is_empty() {
-                                            let mut lock = current_song_img.lock().expect("Main thread panicked!");
-                                            info!("Got album cover url: {}", &song_img);
-
-                                            *lock = song_img;
+                                            if let Err(r_err) = song_img_tx.send(song_img) {
+                                                error!("{r_err}");
+                                                return;
+                                            }
                                         }
                                     }
                                 }
@@ -188,104 +191,97 @@ fn main() {
     }
 
     loop {
-        let currently_playing = sys_media::get_current_playing_info();
-
-        match currently_playing {
-            Err(error) => {
-                if error.is_false_error() {
-                    info!("No media is paused or playing!");
-                } else {
-                    error!("{error}")
-                }
-            }
-            Ok(Some(media_info)) => {
-                let valid_player = !only_am || media_info.player_name == sys_media::consts::APPLE_MUSIC_ID;
-                if let MediaStatus::Playing = media_info.status
-                    && valid_player
-                {
-                    // New song
-                    if previously_played.as_ref() != Some(&media_info) {
-                        info!("App currently playing media: {}", media_info.player_name);
-                        info!(
-                            "Currently Playing: {} by {} on {}",
-                            media_info.song_name, media_info.artist_name, media_info.album_name
-                        );
-
-                        current_has_been_scrobbled = false;
-                        previously_played_started = Some(SystemTime::now());
-
-                        // try to get info from LastFM if we have the creds
-                        if last_fm.is_some() {
-                            let send_err = last_fm_tx.send(LastFmThreadMessage::NowPlaying(media_info.clone()));
-                            if let Err(err) = send_err {
-                                error!("Cannot send to LastFM thread: {err}");
-                            }
-
-                            let send_err = last_fm_tx.send(LastFmThreadMessage::AlbumImg(media_info.clone()));
-                            if let Err(err) = send_err {
-                                error!("Cannot send to LastFM thread: {err}");
-                            }
+        select! {
+            // Instantly update status cover img when we get it from LastFM
+            recv(song_img_rx) -> msg => {
+                match msg {
+                    Ok(cover_url) => {
+                        match update_status(&mut client, previously_played.as_ref().expect("Cover update should only happen after a song has started to play"), &cover_url) {
+                            Ok(()) => info!("Status img updated to: {cover_url}"),
+                            Err(err) => error!("Error trying to update status: {err}")
                         }
-                    } else if last_fm.is_some() {
-                        // Try to scrobble current song if we have the creds
-                        let song_len = Duration::from_micros(media_info.end_time as u64);
-                        let duration = Duration::from_micros(media_info.current_position as u64);
+                        current_song_img = cover_url.clone();
+                    },
+                    Err(err) => {
+                        error!("Error trying to receive from LastFM thread: {err}");
+                        return;
+                    }
+                }
+            },
+            // Otherwise continue checking currently playing song
+            default(TICK_TIME) => {
+                let currently_playing = sys_media::get_current_playing_info();
 
-                        let song_len_secs = song_len.as_secs();
-
-                        // Per LastFM, scrobbles should only happen for songs longer than 30 secs and
-                        // when the user has listened to atleast half of the song
-                        if song_len_secs > 30 && duration.as_secs() > song_len_secs / 2 && !current_has_been_scrobbled {
-                            let timestamp = previously_played_started.unwrap_or_else(SystemTime::now);
-                            match last_fm_tx.send(LastFmThreadMessage::Scrobble(media_info.clone(), timestamp)) {
-                                Ok(()) => current_has_been_scrobbled = true,
-                                Err(err) => error!("Cannot send to LastFM thread: {err}"),
-                            }
+                match currently_playing {
+                    Err(error) => {
+                        if error.is_false_error() {
+                            info!("No media is paused or playing!");
+                        } else {
+                            error!("{error}")
                         }
                     }
+                    Ok(Some(media_info)) => {
+                        let valid_player = !only_am || media_info.player_name == sys_media::consts::APPLE_MUSIC_ID;
+                        if let MediaStatus::Playing = media_info.status
+                            && valid_player
+                        {
+                            // New song
+                            if previously_played.as_ref() != Some(&media_info) {
+                                info!("App currently playing media: {}", media_info.player_name);
+                                info!(
+                                    "Currently Playing: {} by {} on {}",
+                                    media_info.song_name, media_info.artist_name, media_info.album_name
+                                );
 
-                    let now = SystemTime::now();
-                    let dur = now.duration_since(UNIX_EPOCH).expect("epoch should hopefully always be in the future");
+                                current_has_been_scrobbled = false;
+                                previously_played_started = Some(SystemTime::now());
 
-                    let start_dur = dur.saturating_sub(Duration::from_micros(media_info.current_position as u64));
-                    let remaining_time = media_info.end_time - media_info.current_position;
-                    let end_dur = dur.saturating_add(Duration::from_micros(remaining_time as u64));
+                                // try to get info from LastFM if we have the creds
+                                if last_fm.is_some() {
+                                    let send_err = last_fm_tx.send(LastFmThreadMessage::NowPlaying(media_info.clone()));
+                                    if let Err(err) = send_err {
+                                        error!("Cannot send to LastFM thread: {err}");
+                                    }
 
-                    let state_name = format!("{} - {}", media_info.artist_name, media_info.album_name);
+                                    let send_err = last_fm_tx.send(LastFmThreadMessage::AlbumImg(media_info.clone()));
+                                    if let Err(err) = send_err {
+                                        error!("Cannot send to LastFM thread: {err}");
+                                    }
+                                }
+                            } else if last_fm.is_some() {
+                                // Try to scrobble current song if we have the creds
+                                let song_len = Duration::from_micros(media_info.end_time as u64);
+                                let duration = Duration::from_micros(media_info.current_position as u64);
 
-                    let mut activity = activity::Activity::new()
-                        .details(&media_info.song_name)
-                        .state(&state_name)
-                        .activity_type(activity::ActivityType::Listening)
-                        .timestamps(Timestamps::new().start(start_dur.as_secs() as i64).end(end_dur.as_secs() as i64));
+                                let song_len_secs = song_len.as_secs();
 
-                    #[allow(unused_assignments)]
-                    let mut cover_url = String::new();
-                    {
-                        let song_img_handle = current_song_img.lock().expect("LastFM thread panicked!");
-                        cover_url = song_img_handle.clone();
+                                // Per LastFM, scrobbles should only happen for songs longer than 30 secs and
+                                // when the user has listened to atleast half of the song
+                                if song_len_secs > 30 && duration.as_secs() > song_len_secs / 2 && !current_has_been_scrobbled {
+                                    let timestamp = previously_played_started.unwrap_or_else(SystemTime::now);
+                                    match last_fm_tx.send(LastFmThreadMessage::Scrobble(media_info.clone(), timestamp)) {
+                                        Ok(()) => current_has_been_scrobbled = true,
+                                        Err(err) => error!("Cannot send to LastFM thread: {err}"),
+                                    }
+                                }
+                            }
+
+                            if let Err(error) = update_status(&mut client, &media_info, &current_song_img) {
+                                error!("Error while setting activity: {error}");
+                            } else if previously_played.is_none() {
+                                info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name)
+                            }
+
+                            previously_played = Some(media_info);
+                        } else {
+                            debug!("Media is paused. Clearing activity");
+                            clear_status(&mut client);
+                        }
                     }
-
-                    if !cover_url.is_empty() {
-                        activity = activity.assets(Assets::new().large_image(&cover_url))
-                    }
-
-                    if let Err(error) = client.set_activity(activity) {
-                        error!("Error while setting activity: {error}");
-                    } else if previously_played.is_none() {
-                        info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name)
-                    }
-
-                    previously_played = Some(media_info);
-                } else {
-                    debug!("Media is paused. Clearing activity");
-                    clear_status(&mut client);
+                    _ => {}
                 }
             }
-            _ => {}
         }
-
-        thread::sleep(TICK_TIME);
     }
 }
 
@@ -293,6 +289,29 @@ enum LastFmThreadMessage {
     Scrobble(MediaInfo, SystemTime),
     NowPlaying(MediaInfo),
     AlbumImg(MediaInfo),
+}
+
+fn update_status(client: &mut DiscordIpcClient, media_info: &MediaInfo, cover_url: &str) -> Result<(), Box<dyn Error>> {
+    let now = SystemTime::now();
+    let dur = now.duration_since(UNIX_EPOCH).expect("epoch should hopefully always be in the past");
+
+    let start_dur = dur.saturating_sub(Duration::from_micros(media_info.current_position as u64));
+    let remaining_time = media_info.end_time - media_info.current_position;
+    let end_dur = dur.saturating_add(Duration::from_micros(remaining_time as u64));
+
+    let state_name = format!("{} - {}", media_info.artist_name, media_info.album_name);
+
+    let mut activity = activity::Activity::new()
+        .details(&media_info.song_name)
+        .state(&state_name)
+        .activity_type(activity::ActivityType::Listening)
+        .timestamps(Timestamps::new().start(start_dur.as_secs() as i64).end(end_dur.as_secs() as i64));
+
+    if !cover_url.is_empty() {
+        activity = activity.assets(Assets::new().large_image(cover_url))
+    }
+
+    client.set_activity(activity)
 }
 
 fn clear_status(client: &mut DiscordIpcClient) {
