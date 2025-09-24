@@ -5,13 +5,8 @@ mod uri;
 use std::{
     env::{self, VarError},
     error::Error,
-    fs::{self, DirBuilder, File},
-    future,
+    fs::{self, File},
     io::{self, Write},
-    sync::{
-        self, Arc, Mutex,
-        mpsc::{channel, sync_channel},
-    },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -23,10 +18,10 @@ use discord_rich_presence::{
 };
 use log::*;
 use simplelog::*;
-use sys_media::{MediaError, MediaInfo, MediaStatus};
+use sys_media::{MediaInfo, MediaStatus};
 use ureq::{Agent, config::Config};
 
-use crate::lastfm::{AlbumInfo, CredsError, LastFm, LastFmCreds, TrackInfo};
+use crate::lastfm::{CredsError, LastFm, LastFmCreds};
 
 const AMPLE_DPRC_ID: u64 = 1399214780564246670;
 const TICK_TIME: Duration = Duration::from_secs(5);

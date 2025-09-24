@@ -98,8 +98,6 @@ pub enum CredsError {
     RetryableError(i64, String),
 }
 
-pub struct ScrobbleError;
-
 impl LastFm {
     pub fn new(client: ureq::Agent, creds: LastFmCreds) -> LastFm {
         LastFm { client, creds }
