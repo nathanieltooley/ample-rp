@@ -1,6 +1,7 @@
 [package]
 name = "ample"
 version = "0.1.0"
+build = "build.rs"
 edition = "2024"
 
 [dependencies]
@@ -19,6 +20,10 @@ ureq = { version = "3.0.12", features = ["json"] }
 eventlog = { version = "0.3.0", optional = true }
 windows-service = { version = "0.8.0", optional = true }
 crossbeam = "0.8.4"
+tray-item = "0.10.0"
+
+[build-dependencies]
+embed-resource = "3.0.6"
 
 [features]
 # win_service = ["windows-service", "eventlog"]
