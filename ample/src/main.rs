@@ -19,6 +19,7 @@ use discord_rich_presence::{
 use log::*;
 use simplelog::*;
 use sys_media::{MediaInfo, MediaStatus};
+use tray_item::{TIError, TrayItem};
 use ureq::{Agent, config::Config};
 
 use crate::lastfm::{CredsError, LastFm, LastFmCreds};
@@ -122,6 +123,13 @@ fn main() {
     let mut previously_played: Option<MediaInfo> = None;
     let mut previously_played_started: Option<SystemTime> = None;
     let mut current_has_been_scrobbled = false;
+
+    let tray_result = create_tray_icon();
+    if let Err(ref err) = tray_result {
+        error!("Error while trying to create tray icon: {err}");
+    }
+
+    let mut tray = tray_result.ok();
 
     let mut current_song_img = String::new();
     let (last_fm_tx, last_fm_rx) = crossbeam::channel::unbounded::<LastFmThreadMessage>();
@@ -264,7 +272,12 @@ fn main() {
                             if let Err(error) = update_status(&mut client, &media_info, &current_song_img) {
                                 error!("Error while setting activity: {error}");
                             } else if previously_played.is_none() {
-                                info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name)
+                                info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name);
+                                if let Some(ref mut tray) = tray {
+                                    if let Err(err) = tray.0.inner_mut().set_label(&format!("Currently listening to {} by {}", media_info.song_name, media_info.artist_name), tray.1) {
+                                        error!("Failed to set tray label: {err}")
+                                    }
+                                }
                             }
 
                             previously_played = Some(media_info);
@@ -297,6 +310,11 @@ fn update_status(client: &mut DiscordIpcClient, media_info: &MediaInfo, cover_ur
     let state_name = format!("{} - {}", media_info.artist_name, media_info.album_name);
 
     let mut activity = activity::Activity::new()
+        // TODO: This function fails silently to set the activity when the song title, and thus details, is one of two things:
+        // - Too short
+        // - Starts with a number
+        // I tried to get this to work with the song 7 by the Catfish and the Bottlemen. Thus I don't
+        // know if it fails because of the 7 or because its only 1 character. Need to test this out.
         .details(&media_info.song_name)
         .state(&state_name)
         .activity_type(activity::ActivityType::Listening)
@@ -404,6 +422,13 @@ fn get_client() -> DiscordIpcClient {
     client.connect().unwrap();
 
     client
+}
+
+fn create_tray_icon() -> Result<(TrayItem, u32), TIError> {
+    let mut tray = TrayItem::new("Ample", tray_item::IconSource::Resource("ample_icon"))?;
+    tray.inner_mut().set_tooltip("Ample");
+    let id = tray.inner_mut().add_label_with_id("Currently Listening to: Nothing :(")?;
+    Ok((tray, id))
 }
 
 // debugging and logging with services is basically impossible
