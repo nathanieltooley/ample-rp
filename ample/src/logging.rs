@@ -17,6 +17,7 @@ struct RollingLogger {
     max_file_size: u64,
     max_files: u64,
     file_prefix: &'static str,
+    log_buf: Vec<u8>,
 }
 
 impl RollingLogger {
@@ -27,6 +28,7 @@ impl RollingLogger {
             max_file_size,
             max_files,
             file_prefix: "ample",
+            log_buf: Vec::new(),
         }
     }
 
@@ -100,18 +102,29 @@ impl RollingLogger {
 
 impl Write for RollingLogger {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let expected_size = self.inner_file.metadata()?.len() + buf.len() as u64;
-        if expected_size < self.max_file_size {
-            self.inner_file.write(buf)
-        } else {
-            println!("write");
-            let new_file = self.increment_logs(self.get_log_files()?);
-            self.inner_file = new_file.unwrap();
-            self.inner_file.write(buf)
+        let amount_written = self.log_buf.write(buf)?;
+
+        // new line!
+        if buf.len() == 1 && *buf.last().unwrap() == b'\n' {
+            self.flush()?;
         }
+
+        Ok(amount_written)
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        println!("flush!");
+        let expected_size = self.inner_file.metadata()?.len() + self.log_buf.len() as u64;
+        let drain: Vec<u8> = self.log_buf.drain(..).collect();
+
+        if expected_size < self.max_file_size {
+            self.inner_file.write(&drain)?;
+        } else {
+            let new_file = self.increment_logs(self.get_log_files()?);
+            self.inner_file = new_file.unwrap();
+            self.inner_file.write(&drain)?;
+        }
+
         self.inner_file.flush()
     }
 }
