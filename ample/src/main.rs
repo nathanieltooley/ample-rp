@@ -219,6 +219,11 @@ fn main() {
                     Err(error) => {
                         if error.is_false_error() {
                             info!("No media is paused or playing!");
+                            clear_status(&mut client);
+
+                            if let Some((tray, id)) = tray.as_mut() {
+                                clear_tray_label(tray, *id);
+                            }
                         } else {
                             error!("{error}")
                         }
@@ -284,6 +289,10 @@ fn main() {
                         } else {
                             debug!("Media is paused. Clearing activity");
                             clear_status(&mut client);
+
+                            if let Some((tray, id)) = tray.as_mut() {
+                                clear_tray_label(tray, *id);
+                            }
                         }
                     }
                     _ => {}
@@ -399,6 +408,12 @@ fn create_tray_icon() -> Result<(TrayItem, u32), TIError> {
     tray.inner_mut().set_tooltip("Ample")?;
     let id = tray.inner_mut().add_label_with_id("Currently Listening to: Nothing :(")?;
     Ok((tray, id))
+}
+
+fn clear_tray_label(tray: &mut TrayItem, label_id: u32) {
+    if let Err(err) = tray.inner_mut().set_label("Currently Listening to: Nothing :(", label_id) {
+        error!("Error trying to clear tray label: {err}");
+    }
 }
 
 // debugging and logging with services is basically impossible
