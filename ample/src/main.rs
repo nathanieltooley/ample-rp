@@ -1,11 +1,11 @@
 #![cfg_attr(feature = "headless", windows_subsystem = "windows")]
 mod lastfm;
+mod logging;
 mod uri;
 
 use std::{
     env::{self, VarError},
     error::Error,
-    fs::{self, File},
     io::{self, Write},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -17,7 +17,6 @@ use discord_rich_presence::{
     *,
 };
 use log::*;
-use simplelog::*;
 use sys_media::{MediaInfo, MediaStatus};
 use tray_item::{TIError, TrayItem};
 use ureq::{Agent, config::Config};
@@ -57,9 +56,8 @@ fn main() {
     };
 
     let log_level = if debug { LevelFilter::Debug } else { LevelFilter::Info };
-    let log_file = open_log_file().unwrap();
 
-    init_log(log_level, log_file);
+    logging::init_log(log_level).unwrap();
 
     debug!("inited");
 
@@ -138,6 +136,7 @@ fn main() {
     let last_fm = get_lastfm_creds();
     if let Some(ref l) = last_fm {
         let inner_last_fm = l.clone();
+        // LastFM thread
         thread::spawn(move || {
             loop {
                 let result = last_fm_rx.recv();
@@ -193,6 +192,7 @@ fn main() {
         });
     }
 
+    // Main thread loop
     loop {
         select! {
             // Instantly update status cover img when we get it from LastFM
@@ -385,36 +385,6 @@ fn get_lastfm_creds() -> Option<LastFm> {
     }
 }
 
-fn open_log_file() -> io::Result<File> {
-    // Should create something like "/AppData/ample/config/logs" on windows
-    // and "~/.config/ample/logs" on linux
-    let log_dir = directories::ProjectDirs::from("", "", APP_NAME)
-        .expect("valid project dir")
-        .config_dir()
-        .join("logs");
-
-    fs::create_dir_all(&log_dir)?;
-
-    // TODO: Append to end of file, not truncate file
-    File::create(log_dir.join("ample.log"))
-}
-
-fn init_log(log_level: LevelFilter, log_file: File) {
-    // only possible error is initting twice
-    let _ = CombinedLogger::init(vec![
-        TermLogger::new(
-            log_level,
-            ConfigBuilder::new()
-                .set_location_level(LevelFilter::Debug)
-                .set_level_color(Level::Error, Some(Color::Red))
-                .build(),
-            TerminalMode::Mixed,
-            ColorChoice::Auto,
-        ),
-        WriteLogger::new(log_level, ConfigBuilder::new().set_location_level(LevelFilter::Debug).build(), log_file),
-    ]);
-}
-
 fn get_client() -> DiscordIpcClient {
     let mut client = DiscordIpcClient::new(&format!("{AMPLE_DPRC_ID}")).unwrap();
     // NOTE: Panics because really this entire app can't function without it.
@@ -426,7 +396,7 @@ fn get_client() -> DiscordIpcClient {
 
 fn create_tray_icon() -> Result<(TrayItem, u32), TIError> {
     let mut tray = TrayItem::new("Ample", tray_item::IconSource::Resource("ample_icon"))?;
-    tray.inner_mut().set_tooltip("Ample");
+    tray.inner_mut().set_tooltip("Ample")?;
     let id = tray.inner_mut().add_label_with_id("Currently Listening to: Nothing :(")?;
     Ok((tray, id))
 }
