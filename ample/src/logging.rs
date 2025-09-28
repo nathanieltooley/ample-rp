@@ -113,7 +113,6 @@ impl Write for RollingLogger {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        println!("flush!");
         let expected_size = self.inner_file.metadata()?.len() + self.log_buf.len() as u64;
         let drain: Vec<u8> = self.log_buf.drain(..).collect();
 
