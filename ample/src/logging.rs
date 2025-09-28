@@ -52,10 +52,7 @@ impl RollingLogger {
                             Err(_) => continue,
                         };
 
-                        files.push(RollingLogFile {
-                            file_name: entry_name,
-                            file_id: index,
-                        });
+                        files.push(RollingLogFile { file_id: index });
 
                         continue;
                     }
@@ -64,10 +61,7 @@ impl RollingLogger {
 
             // If the log file does not have an ID in its name but still matchs "[file_prefix].log"
             if re.is_match(&entry_name) {
-                files.push(RollingLogFile {
-                    file_name: entry_name,
-                    file_id: 0,
-                });
+                files.push(RollingLogFile { file_id: 0 });
             }
         }
 
@@ -123,7 +117,6 @@ impl Write for RollingLogger {
 }
 
 struct RollingLogFile {
-    file_name: String,
     file_id: u64,
 }
 
