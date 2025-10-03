@@ -243,6 +243,7 @@ fn main() {
 
                                 current_has_been_scrobbled = false;
                                 previously_played_started = Some(SystemTime::now());
+                                previously_played = None;
 
                                 // try to get info from LastFM if we have the creds
                                 if last_fm.is_some() {
