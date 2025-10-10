@@ -137,6 +137,7 @@ fn main() {
     if let Some(ref l) = last_fm {
         let inner_last_fm = l.clone();
         // LastFM thread
+        info!("Started LastFM loop");
         thread::spawn(move || {
             loop {
                 let result = last_fm_rx.recv();
@@ -193,6 +194,7 @@ fn main() {
     }
 
     // Main thread loop
+    info!("Started listening loop");
     loop {
         select! {
             // Instantly update status cover img when we get it from LastFM
