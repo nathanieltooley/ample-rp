@@ -220,7 +220,7 @@ fn main() {
                 match currently_playing {
                     Err(error) => {
                         if error.is_false_error() {
-                            info!("No media is paused or playing!");
+                            debug!("No media is paused or playing!");
                             clear_status(&mut client);
 
                             if let Some((tray, id)) = tray.as_mut() {
