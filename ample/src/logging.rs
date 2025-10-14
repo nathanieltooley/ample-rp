@@ -29,7 +29,7 @@ impl RollingLogger {
             max_file_size,
             max_files,
             file_prefix: "ample",
-            log_buf: Vec::new(),
+            log_buf: Vec::with_capacity(128),
         }
     }
 
@@ -124,7 +124,6 @@ impl Write for RollingLogger {
     fn flush(&mut self) -> io::Result<()> {
         let mut inner_file = self.open_log_file()?;
         let expected_size = inner_file.metadata()?.len() + self.log_buf.len() as u64;
-        let drain: Vec<u8> = self.log_buf.drain(..).collect();
 
         if expected_size > self.max_file_size {
             // Shift logs by 1
@@ -133,7 +132,8 @@ impl Write for RollingLogger {
             inner_file = self.open_log_file()?;
         }
 
-        inner_file.write(&drain)?;
+        inner_file.write(&self.log_buf)?;
+        self.log_buf.clear();
 
         inner_file.flush()
     }
