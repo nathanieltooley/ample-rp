@@ -1,10 +1,11 @@
 #![cfg_attr(feature = "headless", windows_subsystem = "windows")]
 mod lastfm;
 mod logging;
+mod secrets;
 mod uri;
 
 use std::{
-    env::{self, VarError},
+    env::VarError,
     error::Error,
     io::{self, Write},
     thread,
@@ -26,16 +27,6 @@ use crate::lastfm::{CredsError, LastFm, LastFmCreds};
 const AMPLE_DPRC_ID: u64 = 1399214780564246670;
 const TICK_TIME: Duration = Duration::from_secs(5);
 const APP_NAME: &str = "ample";
-const SECRET_ENTRY_NAME: &str = "ampleSecret";
-const PASSWORD_ENTRY_NAME: &str = "amplePassword";
-const SESSION_ENTRY_NAME: &str = "ampleSession";
-
-// #[cfg(feature = "win_service")]
-// fn main() {
-//     if let Err(err) = service::run() {
-//         panic!("Error trying to start service: {err}");
-//     }
-// }
 
 fn main() {
     if let Err(err) = dotenvy::dotenv() {
@@ -61,66 +52,67 @@ fn main() {
 
     debug!("inited");
 
-    let args = env::args();
-    let mut password_flag = false;
-    let mut secret_flag = false;
+    // let args = env::args();
+    // let mut password_flag = false;
+    // let mut secret_flag = false;
 
-    // simple arg parsing
-    for arg in args.into_iter().skip(1) {
-        if arg == "--password" || arg == "-p" {
-            password_flag = true;
-        } else if arg == "--secret" || arg == "-s" {
-            secret_flag = true;
-        } else {
-            warn!("Unknown argument: {arg}")
-        }
-    }
+    // // simple arg parsing
+    // for arg in args.into_iter().skip(1) {
+    //     if arg == "--password" || arg == "-p" {
+    //         password_flag = true;
+    //     } else if arg == "--secret" || arg == "-s" {
+    //         secret_flag = true;
+    //     } else {
+    //         warn!("Unknown argument: {arg}")
+    //     }
+    // }
 
-    if password_flag {
-        let input = prompted_input("Password: ");
-        let password_entry = match keyring::Entry::new_with_target(PASSWORD_ENTRY_NAME, APP_NAME, APP_NAME) {
-            Err(err) => {
-                error!("{err}");
-                return;
-            }
-            Ok(entry) => entry,
-        };
-        match password_entry.set_password(&input) {
-            Err(err) => {
-                error!("Could not set password!: {err}");
-                return;
-            }
-            Ok(()) => info!("Password has been set!"),
-        }
-    }
+    // if password_flag {
+    //     let input = prompted_input("Password: ");
+    //     let password_entry = match keyring::Entry::new_with_target(PASSWORD_ENTRY_NAME, APP_NAME, APP_NAME) {
+    //         Err(err) => {
+    //             error!("{err}");
+    //             return;
+    //         }
+    //         Ok(entry) => entry,
+    //     };
+    //     match password_entry.set_password(&input) {
+    //         Err(err) => {
+    //             error!("Could not set password!: {err}");
+    //             return;
+    //         }
+    //         Ok(()) => info!("Password has been set!"),
+    //     }
+    // }
 
-    if secret_flag {
-        let input = prompted_input("API Secret: ");
-        let secret_entry = match keyring::Entry::new_with_target(SECRET_ENTRY_NAME, APP_NAME, APP_NAME) {
-            Err(err) => {
-                error!("{err}");
-                return;
-            }
-            Ok(entry) => entry,
-        };
-        match secret_entry.set_password(&input) {
-            Err(err) => {
-                error!("Failed to set secret!: {err}");
-                return;
-            }
-            Ok(()) => info!("Secret has been set!"),
-        }
-    }
+    // if secret_flag {
+    //     let input = prompted_input("API Secret: ");
+    //     let secret_entry = match keyring::Entry::new_with_target(SECRET_ENTRY_NAME, APP_NAME, APP_NAME) {
+    //         Err(err) => {
+    //             error!("{err}");
+    //             return;
+    //         }
+    //         Ok(entry) => entry,
+    //     };
+    //     match secret_entry.set_password(&input) {
+    //         Err(err) => {
+    //             error!("Failed to set secret!: {err}");
+    //             return;
+    //         }
+    //         Ok(()) => info!("Secret has been set!"),
+    //     }
+    // }
 
-    if password_flag || secret_flag {
-        return;
-    }
+    // if password_flag || secret_flag {
+    //     return;
+    // }
 
     let only_am = true;
     let mut client = get_client();
     let mut previously_played: Option<MediaInfo> = None;
     let mut previously_played_started: Option<SystemTime> = None;
     let mut current_has_been_scrobbled = false;
+    let mut previously_paused = false;
 
     let tray_result = create_tray_icon();
     if let Err(ref err) = tray_result {
@@ -141,6 +133,7 @@ fn main() {
         thread::spawn(move || {
             loop {
                 let result = last_fm_rx.recv();
+                debug!("lastfm thread received message");
                 match result {
                     Ok(msg) => match msg {
                         LastFmThreadMessage::NowPlaying(info) => {
@@ -235,6 +228,7 @@ fn main() {
                         if let MediaStatus::Playing = media_info.status
                             && valid_player
                         {
+                            previously_paused = false;
                             // New song
                             if previously_played.as_ref() != Some(&media_info) {
                                 info!("App currently playing media: {}", media_info.player_name);
@@ -289,13 +283,14 @@ fn main() {
                             }
 
                             previously_played = Some(media_info);
-                        } else {
+                        } else if !previously_paused {
                             debug!("Media is paused. Clearing activity");
                             clear_status(&mut client);
 
                             if let Some((tray, id)) = tray.as_mut() {
                                 clear_tray_label(tray, *id);
                             }
+                            previously_paused = true;
                         }
                     }
                     _ => {}
@@ -335,6 +330,8 @@ fn update_status(client: &mut DiscordIpcClient, media_info: &MediaInfo, cover_ur
     if !cover_url.is_empty() {
         activity = activity.assets(Assets::new().large_image(cover_url))
     }
+
+    debug!("setting status");
 
     client.set_activity(activity)
 }

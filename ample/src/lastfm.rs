@@ -10,7 +10,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::uri;
+use crate::{secrets, uri};
+const SESSION_ENTRY_NAME: &str = "ampleSession";
 
 const API_ROOT: &str = "https://ws.audioscrobbler.com/2.0";
 
@@ -196,19 +197,10 @@ impl LastFmCreds {
         let api_key = env::var("AMPLE_API_KEY").map_err(|var_error| CredsError::Env("AMPLE_API_KEY", var_error))?;
         let username = env::var("AMPLE_USERNAME").map_err(|var_error| CredsError::Env("AMPLE_USERNAME", var_error))?;
 
-        let password_entry = Entry::new_with_target(crate::PASSWORD_ENTRY_NAME, crate::APP_NAME, crate::APP_NAME)?;
-        let secret_entry = Entry::new_with_target(crate::SECRET_ENTRY_NAME, crate::APP_NAME, crate::APP_NAME)?;
+        let password = secrets::get_lastfm_password().ok_or(CredsError::MissingPassword)?;
+        let secret = secrets::get_lastfm_secret().ok_or(CredsError::MissingApiSecret)?;
 
-        let password = password_entry.get_password().map_err(|kr_err| match kr_err {
-            keyring::Error::NoEntry => CredsError::MissingPassword,
-            _ => CredsError::Keyring(kr_err),
-        })?;
-        let secret = secret_entry.get_password().map_err(|kr_err| match kr_err {
-            keyring::Error::NoEntry => CredsError::MissingApiSecret,
-            _ => CredsError::Keyring(kr_err),
-        })?;
-
-        let session_entry = Entry::new_with_target(crate::SESSION_ENTRY_NAME, crate::APP_NAME, crate::APP_NAME)?;
+        let session_entry = Entry::new_with_target(SESSION_ENTRY_NAME, crate::APP_NAME, crate::APP_NAME)?;
         let session_token = match session_entry.get_password() {
             Err(err) => {
                 // Ask LastFM for session token
