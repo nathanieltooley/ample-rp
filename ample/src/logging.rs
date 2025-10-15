@@ -2,7 +2,6 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
-    str::FromStr,
 };
 
 use log::{Level, LevelFilter};
@@ -14,7 +13,7 @@ const MAX_FILES: u64 = 3;
 
 struct RollingLogger {
     log_dir: PathBuf,
-    log_file_name: PathBuf,
+    inner_file: File,
     max_file_size: u64,
     max_files: u64,
     file_prefix: &'static str,
@@ -22,10 +21,10 @@ struct RollingLogger {
 }
 
 impl RollingLogger {
-    fn new(log_dir: PathBuf, file_name: PathBuf, max_file_size: u64, max_files: u64) -> RollingLogger {
+    fn new(log_dir: PathBuf, file: File, max_file_size: u64, max_files: u64) -> RollingLogger {
         RollingLogger {
             log_dir,
-            log_file_name: file_name,
+            inner_file: file,
             max_file_size,
             max_files,
             file_prefix: "ample",
@@ -71,7 +70,7 @@ impl RollingLogger {
         Ok(files)
     }
 
-    fn increment_logs(&self, mut log_files: Vec<RollingLogFile>) -> Result<(), io::Error> {
+    fn increment_logs(&self, mut log_files: Vec<RollingLogFile>) -> Result<File, io::Error> {
         log_files.sort_by(|a, b| b.file_id.cmp(&a.file_id));
         // rename all log files to temp-[prefix]-[log_id].log
         for log_file in log_files.iter_mut() {
@@ -89,7 +88,7 @@ impl RollingLogger {
         }
 
         // create the index 0 base log
-        File::create(self.log_dir.join(format!("{}.log", self.file_prefix)))?;
+        let new_inner_file = File::create(self.log_dir.join(format!("{}.log", self.file_prefix)))?;
 
         // remove extra log file
         if (log_files.len() + 1) as u64 > self.max_files {
@@ -97,15 +96,7 @@ impl RollingLogger {
             fs::remove_file(log_to_remove.create_log_name(self.file_prefix, &self.log_dir))?;
         }
 
-        Ok(())
-    }
-
-    fn open_log_file(&self) -> Result<File, io::Error> {
-        OpenOptions::new()
-            .append(true)
-            .read(true)
-            .create(true)
-            .open(self.log_dir.join(&self.log_file_name))
+        Ok(new_inner_file)
     }
 }
 
@@ -122,20 +113,18 @@ impl Write for RollingLogger {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        let mut inner_file = self.open_log_file()?;
-        let expected_size = inner_file.metadata()?.len() + self.log_buf.len() as u64;
+        let expected_size = self.inner_file.metadata()?.len() + self.log_buf.len() as u64;
+        let drain: Vec<u8> = self.log_buf.drain(..).collect();
 
-        if expected_size > self.max_file_size {
-            // Shift logs by 1
-            self.increment_logs(self.get_log_files()?)?;
-            // Open new and empty ample.log file
-            inner_file = self.open_log_file()?;
+        if expected_size < self.max_file_size {
+            self.inner_file.write(&drain)?;
+        } else {
+            let new_file = self.increment_logs(self.get_log_files()?);
+            self.inner_file = new_file.unwrap();
+            self.inner_file.write(&drain)?;
         }
 
-        inner_file.write(&self.log_buf)?;
-        self.log_buf.clear();
-
-        inner_file.flush()
+        self.inner_file.flush()
     }
 }
 
@@ -153,7 +142,7 @@ impl RollingLogFile {
     }
 }
 
-fn create_rolling_logger() -> io::Result<RollingLogger> {
+fn open_log_file() -> io::Result<RollingLogger> {
     // Should create something like "/AppData/ample/config/logs" on windows
     // and "~/.config/ample/logs" on linux
     let log_dir = directories::ProjectDirs::from("", "", crate::APP_NAME)
@@ -162,17 +151,18 @@ fn create_rolling_logger() -> io::Result<RollingLogger> {
         .join("logs");
 
     fs::create_dir_all(&log_dir)?;
+    let file_path = log_dir.join("ample.log");
 
     Ok(RollingLogger::new(
         log_dir,
-        PathBuf::from_str("ample.log").unwrap(),
+        OpenOptions::new().append(true).read(true).create(true).open(file_path)?,
         MAX_FILE_SIZE,
         MAX_FILES,
     ))
 }
 
 pub fn init_log(log_level: LevelFilter) -> Result<(), io::Error> {
-    let log_file = create_rolling_logger()?;
+    let log_file = open_log_file()?;
     // only possible error is initting twice
     let _ = CombinedLogger::init(vec![
         TermLogger::new(
