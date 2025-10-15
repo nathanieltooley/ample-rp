@@ -89,9 +89,9 @@ pub enum CredsError {
     Env(&'static str, env::VarError),
     #[error("Error obtaining credentials from keyring: {0}")]
     Keyring(#[from] keyring::Error),
-    #[error("Password has not been set! Call with --password flag to set password!")]
+    #[error("LastFM password has not been set! Check the README for more info about setting your LastFM password.")]
     MissingPassword,
-    #[error("LastFM secret has not been set! Call with --secret flag to set secret!")]
+    #[error("LastFM secret has not been set! Check the README for more info about setting your LastFM API secret.")]
     MissingApiSecret,
     #[error("Http error: {0}")]
     Http(#[from] ureq::Error),
