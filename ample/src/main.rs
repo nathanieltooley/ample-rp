@@ -28,7 +28,16 @@ const AMPLE_DPRC_ID: u64 = 1399214780564246670;
 const TICK_TIME: Duration = Duration::from_secs(5);
 const APP_NAME: &str = "ample";
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
+static mut STOP: bool = false;
+
 fn main() {
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
+
     if let Err(err) = dotenvy::dotenv() {
         if err.not_found() {
             info!("No .env file found. Skipping...")
@@ -52,61 +61,6 @@ fn main() {
 
     debug!("inited");
 
-    // let args = env::args();
-    // let mut password_flag = false;
-    // let mut secret_flag = false;
-
-    // // simple arg parsing
-    // for arg in args.into_iter().skip(1) {
-    //     if arg == "--password" || arg == "-p" {
-    //         password_flag = true;
-    //     } else if arg == "--secret" || arg == "-s" {
-    //         secret_flag = true;
-    //     } else {
-    //         warn!("Unknown argument: {arg}")
-    //     }
-    // }
-
-    // if password_flag {
-    //     let input = prompted_input("Password: ");
-    //     let password_entry = match keyring::Entry::new_with_target(PASSWORD_ENTRY_NAME, APP_NAME, APP_NAME) {
-    //         Err(err) => {
-    //             error!("{err}");
-    //             return;
-    //         }
-    //         Ok(entry) => entry,
-    //     };
-    //     match password_entry.set_password(&input) {
-    //         Err(err) => {
-    //             error!("Could not set password!: {err}");
-    //             return;
-    //         }
-    //         Ok(()) => info!("Password has been set!"),
-    //     }
-    // }
-
-    // if secret_flag {
-    //     let input = prompted_input("API Secret: ");
-    //     let secret_entry = match keyring::Entry::new_with_target(SECRET_ENTRY_NAME, APP_NAME, APP_NAME) {
-    //         Err(err) => {
-    //             error!("{err}");
-    //             return;
-    //         }
-    //         Ok(entry) => entry,
-    //     };
-    //     match secret_entry.set_password(&input) {
-    //         Err(err) => {
-    //             error!("Failed to set secret!: {err}");
-    //             return;
-    //         }
-    //         Ok(()) => info!("Secret has been set!"),
-    //     }
-    // }
-
-    // if password_flag || secret_flag {
-    //     return;
-    // }
-
     let only_am = true;
     let mut client = get_client();
     let mut previously_played: Option<MediaInfo> = None;
@@ -122,8 +76,8 @@ fn main() {
     let mut tray = tray_result.ok();
 
     let mut current_song_img = String::new();
-    let (last_fm_tx, last_fm_rx) = crossbeam::channel::unbounded::<LastFmThreadMessage>();
-    let (song_img_tx, song_img_rx) = crossbeam::channel::unbounded::<String>();
+    let (last_fm_tx, last_fm_rx) = crossbeam::channel::bounded::<LastFmThreadMessage>(1);
+    let (song_img_tx, song_img_rx) = crossbeam::channel::bounded::<String>(1);
 
     let last_fm = get_lastfm_creds();
     if let Some(ref l) = last_fm {
@@ -208,6 +162,11 @@ fn main() {
             },
             // Otherwise continue checking currently playing song
             default(TICK_TIME) => {
+                unsafe {
+                    if STOP {
+                        break;
+                    }
+                }
                 let currently_playing = sys_media::get_current_playing_info();
 
                 match currently_playing {
@@ -276,6 +235,7 @@ fn main() {
                             } else if previously_played.is_none() {
                                 info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name);
                                 if let Some(ref mut tray) = tray {
+                                    // TODO: move this out so that it updates even after pause
                                     if let Err(err) = tray.0.inner_mut().set_label(&format!("Currently listening to {} by {}", media_info.song_name, media_info.artist_name), tray.1) {
                                         error!("Failed to set tray label: {err}")
                                     }
@@ -407,6 +367,9 @@ fn create_tray_icon() -> Result<(TrayItem, u32), TIError> {
     let mut tray = TrayItem::new("Ample", tray_item::IconSource::Resource("ample_icon"))?;
     tray.inner_mut().set_tooltip("Ample")?;
     let id = tray.inner_mut().add_label_with_id("Currently Listening to: Nothing :(")?;
+    tray.add_menu_item("Exit", || unsafe {
+        STOP = true;
+    })?;
     Ok((tray, id))
 }
 
