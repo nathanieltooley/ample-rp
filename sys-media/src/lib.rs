@@ -1,12 +1,13 @@
 use core::fmt;
 
-mod win_media;
-pub mod consts;
+use windows::Media::Control::GlobalSystemMediaTransportControlsSession;
 
+pub mod consts;
+mod win_media;
 
 #[derive(Debug, Clone)]
 pub struct MediaInfo {
-    /// Name of the app or executable that started playing this media 
+    /// Name of the app or executable that started playing this media
     pub player_name: String,
     pub artist_name: String,
     pub song_name: String,
@@ -20,12 +21,12 @@ pub struct MediaInfo {
 }
 
 impl PartialEq for MediaInfo {
-   fn eq(&self, other: &Self) -> bool {
-       self.album_name == other.album_name 
-       && self.artist_name == other.artist_name 
-       && self.song_name == other.song_name
-       && self.player_name == other.player_name
-   } 
+    fn eq(&self, other: &Self) -> bool {
+        self.album_name == other.album_name
+            && self.artist_name == other.artist_name
+            && self.song_name == other.song_name
+            && self.player_name == other.player_name
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -35,7 +36,7 @@ pub enum MediaStatus {
     Changing,
     Stopped,
     Playing,
-    Paused
+    Paused,
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +49,7 @@ pub enum MediaType {
 
 #[derive(Debug)]
 pub enum MediaError {
-    Windows(windows::core::Error)
+    Windows(windows::core::Error),
 }
 
 impl MediaError {
@@ -61,7 +62,6 @@ impl MediaError {
         } else {
             false
         }
-
     }
 }
 
@@ -74,17 +74,31 @@ impl From<windows::core::Error> for MediaError {
 impl fmt::Display for MediaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            MediaError::Windows(error) => write!(f, "An error occurred while trying to get currently playing media: {error}") 
+            MediaError::Windows(error) => write!(f, "An error occurred while trying to get currently playing media: {error}"),
         }
     }
 }
 
-/// Get the currently playing song's info including what app started playing it.
-/// Blocks execution if waiting on async or syscalls.
-pub fn get_current_playing_info() -> Result<Option<MediaInfo>, MediaError> {
+/// An object capable of getting information about the currently playing media (Music, Video, etc.).
+pub enum MediaListener {
+    Windows { session: GlobalSystemMediaTransportControlsSession },
+}
+
+impl MediaListener {
+    /// Get the currently playing song's info including what app started playing it.
+    /// Blocks execution if waiting on async or syscalls.
+    pub fn get_current_playing_info(&self) -> Result<Option<MediaInfo>, MediaError> {
+        match self {
+            MediaListener::Windows { session } => win_media::get_current_session_info(session).map_err(|err| err.into()),
+        }
+    }
+}
+
+/// Creates a MediaListener for the given OS
+pub fn get_listener() -> Result<MediaListener, MediaError> {
     if cfg!(windows) {
         let session = win_media::get_current_session()?;
-        win_media::get_current_session_info(session).map_err(|err| err.into())
+        Ok(MediaListener::Windows { session })
     } else {
         // Possible ways I've found to get info on linux:
         // - playerctl
@@ -93,7 +107,7 @@ pub fn get_current_playing_info() -> Result<Option<MediaInfo>, MediaError> {
         // The other option is using the playerctl "library" but this seems more complicated than just a libplayerctl sort of thing.
         // It also looks like to use the playerctl "library," we'd have run Glib's EventLoop and listen for events? Which would require
         // a more complicated API or possibly an explicit separation of functions. Basically, windows would have a function and linux would need an
-        // init or start function and then a normal function? Maybe have the function agnostic but init on windows is a no-op? 
+        // init or start function and then a normal function? Maybe have the function agnostic but init on windows is a no-op?
         // https://github.com/altdesktop/playerctl/tree/master
         // For library route: https://gtk-rs.org/
         //
