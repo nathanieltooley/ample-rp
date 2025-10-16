@@ -70,7 +70,7 @@ fn main() {
 
     let media_listener = sys_media::get_listener().unwrap();
 
-    let tray_result = create_tray_icon();
+    let tray_result = AmpleTray::create();
     if let Err(ref err) = tray_result {
         error!("Error while trying to create tray icon: {err}");
     }
@@ -192,8 +192,10 @@ fn main() {
                             debug!("No media is paused or playing!");
                             clear_status(&mut client);
 
-                            if let Some((tray, id)) = tray.as_mut() {
-                                clear_tray_label(tray, *id);
+                            if let Some(ref mut tray) = tray {
+                                if let Err(error) = tray.clear() {
+                                    error!("failed to clear tray status: {error}")
+                                }
                             }
                         } else {
                             error!("{error}")
@@ -251,11 +253,11 @@ fn main() {
                                 error!("Error while setting activity: {error}");
                             } else if previously_played.is_none() {
                                 info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name);
-                                if let Some(ref mut tray) = tray {
-                                    // TODO: move this out so that it updates even after pause
-                                    if let Err(err) = tray.0.inner_mut().set_label(&format!("Currently listening to {} by {}", media_info.song_name, media_info.artist_name), tray.1) {
-                                        error!("Failed to set tray label: {err}")
-                                    }
+                            }
+
+                            if let Some(ref mut tray) = tray {
+                                if let Err(error) = tray.update(&media_info) {
+                                    error!("failed to update tray status: {error}");
                                 }
                             }
 
@@ -264,8 +266,10 @@ fn main() {
                             debug!("Media is paused. Clearing activity");
                             clear_status(&mut client);
 
-                            if let Some((tray, id)) = tray.as_mut() {
-                                clear_tray_label(tray, *id);
+                            if let Some(ref mut tray) = tray {
+                                if let Err(error) = tray.clear() {
+                                    error!("failed to clear tray status: {error}")
+                                }
                             }
                             previously_paused = true;
                         }
@@ -281,6 +285,50 @@ enum LastFmThreadMessage {
     Scrobble(MediaInfo, SystemTime),
     NowPlaying(MediaInfo),
     AlbumImg(MediaInfo),
+}
+
+struct AmpleTray {
+    tray_item: TrayItem,
+    status_label_id: u32,
+}
+
+impl AmpleTray {
+    fn create() -> Result<AmpleTray, TIError> {
+        let mut tray = TrayItem::new("Ample", tray_item::IconSource::Resource("ample_icon"))?;
+        let id = tray.inner_mut().add_label_with_id("Currently Listening to: Nothing :(")?;
+
+        tray.inner_mut().set_tooltip("Ample")?;
+        tray.add_menu_item("Exit", || unsafe {
+            STOP = true;
+        })?;
+
+        Ok(AmpleTray {
+            tray_item: tray,
+            status_label_id: id,
+        })
+    }
+
+    fn clear(&mut self) -> Result<(), TIError> {
+        self.tray_item
+            .inner_mut()
+            .set_label("Currently Listening to: Nothing :(", self.status_label_id)
+    }
+
+    fn update(&mut self, media_info: &MediaInfo) -> Result<(), TIError> {
+        self.tray_item.inner_mut().set_label(
+            &format!("Currently listening to {} by {}", media_info.song_name, media_info.artist_name),
+            self.status_label_id,
+        )
+    }
+}
+
+fn get_client() -> DiscordIpcClient {
+    let mut client = DiscordIpcClient::new(&format!("{AMPLE_DPRC_ID}")).unwrap();
+    // NOTE: Panics because really this entire app can't function without it.
+    // In the future, I'll probably make the error output a bit nicer but still
+    client.connect().unwrap();
+
+    client
 }
 
 fn update_status(client: &mut DiscordIpcClient, media_info: &MediaInfo, cover_url: &str) -> Result<(), Box<dyn Error>> {
@@ -359,30 +407,5 @@ fn get_lastfm_creds() -> Option<LastFm> {
             error!("LastFM support not enabled: {err}");
             None
         }
-    }
-}
-
-fn get_client() -> DiscordIpcClient {
-    let mut client = DiscordIpcClient::new(&format!("{AMPLE_DPRC_ID}")).unwrap();
-    // NOTE: Panics because really this entire app can't function without it.
-    // In the future, I'll probably make the error output a bit nicer but still
-    client.connect().unwrap();
-
-    client
-}
-
-fn create_tray_icon() -> Result<(TrayItem, u32), TIError> {
-    let mut tray = TrayItem::new("Ample", tray_item::IconSource::Resource("ample_icon"))?;
-    tray.inner_mut().set_tooltip("Ample")?;
-    let id = tray.inner_mut().add_label_with_id("Currently Listening to: Nothing :(")?;
-    tray.add_menu_item("Exit", || unsafe {
-        STOP = true;
-    })?;
-    Ok((tray, id))
-}
-
-fn clear_tray_label(tray: &mut TrayItem, label_id: u32) {
-    if let Err(err) = tray.inner_mut().set_label("Currently Listening to: Nothing :(", label_id) {
-        error!("Error trying to clear tray label: {err}");
     }
 }
