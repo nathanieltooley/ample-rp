@@ -194,8 +194,8 @@ impl LastFm {
 /// open a web browser.
 impl LastFmCreds {
     pub fn get_creds(client: Agent) -> Result<LastFmCreds, CredsError> {
-        let api_key = env::var("AMPLE_API_KEY").map_err(|var_error| CredsError::Env("AMPLE_API_KEY", var_error))?;
-        let username = env::var("AMPLE_USERNAME").map_err(|var_error| CredsError::Env("AMPLE_USERNAME", var_error))?;
+        let api_key = env::var("AMPLE_FM_API_KEY").map_err(|var_error| CredsError::Env("AMPLE_FM_API_KEY", var_error))?;
+        let username = env::var("AMPLE_FM_USERNAME").map_err(|var_error| CredsError::Env("AMPLE_FM_USERNAME", var_error))?;
 
         let password = secrets::get_lastfm_password().ok_or(CredsError::MissingPassword)?;
         let secret = secrets::get_lastfm_secret().ok_or(CredsError::MissingApiSecret)?;
