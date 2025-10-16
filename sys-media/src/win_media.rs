@@ -7,18 +7,18 @@ struct RawStatusNumber(i32);
 struct RawMediaTypeNumber(i32);
 
 impl From<RawStatusNumber> for MediaStatus {
-   fn from(value: RawStatusNumber) -> Self {
-       match value.0 {
-        0 => Self::Closed,
-        1 => Self::Opened,
-        2 => Self::Changing,
-        3 => Self::Stopped,
-        4 => Self::Playing,
-        5 => Self::Paused,
-        // SAFETY: Using RawStatusNumber we make sure that the only values we could get here are from the windows API itself
-        _ => unreachable!()
-       }
-   } 
+    fn from(value: RawStatusNumber) -> Self {
+        match value.0 {
+            0 => Self::Closed,
+            1 => Self::Opened,
+            2 => Self::Changing,
+            3 => Self::Stopped,
+            4 => Self::Playing,
+            5 => Self::Paused,
+            // SAFETY: Using RawStatusNumber we make sure that the only values we could get here are from the windows API itself
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl From<RawMediaTypeNumber> for MediaType {
@@ -29,7 +29,7 @@ impl From<RawMediaTypeNumber> for MediaType {
             2 => Self::Video,
             3 => Self::Image,
             // SAFETY: Using RawMediaTypeNumber we make sure that the only values we could get here are from the windows API itself
-            _ => unreachable!()
+            _ => unreachable!(),
         }
     }
 }
@@ -41,7 +41,7 @@ pub fn get_current_session() -> Result<GlobalSystemMediaTransportControlsSession
     media_controller.GetCurrentSession()
 }
 
-pub fn get_current_session_info(session: GlobalSystemMediaTransportControlsSession) -> Result<Option<MediaInfo>, windows::core::Error>{
+pub fn get_current_session_info(session: &GlobalSystemMediaTransportControlsSession) -> Result<Option<MediaInfo>, windows::core::Error> {
     let player = session.SourceAppUserModelId()?;
     let media_props = session.TryGetMediaPropertiesAsync()?.get()?;
 
@@ -58,26 +58,32 @@ pub fn get_current_session_info(session: GlobalSystemMediaTransportControlsSessi
         let apple_artist_album_string = media_props.Artist()?.to_string_lossy();
         let mut splits = apple_artist_album_string.split('—');
 
-        artist_name = splits.next().expect("apple music has changed how they display artist and album names").trim().to_owned();
-        album_name = splits.next().expect("apple music has changed how they display artist and album names").trim().to_owned();
+        artist_name = splits
+            .next()
+            .expect("apple music has changed how they display artist and album names")
+            .trim()
+            .to_owned();
+        album_name = splits
+            .next()
+            .expect("apple music has changed how they display artist and album names")
+            .trim()
+            .to_owned();
     }
 
     let timeline_info = session.GetTimelineProperties()?;
     let end_time = timeline_info.EndTime()?.Duration / 10; // For some reason, these values are 10x smaller than a microsecond?
     let position = timeline_info.Position()?.Duration / 10;
-    
-    Ok(Some(
-        MediaInfo { 
-            player_name: player.to_string_lossy(), 
-            artist_name, 
-            song_name: media_props.Title()?.to_string_lossy(), 
-            album_name,
-            status,
-            media_type: m_type,
-            end_time,
-            current_position: position
-        }
-    ))
+
+    Ok(Some(MediaInfo {
+        player_name: player.to_string_lossy(),
+        artist_name,
+        song_name: media_props.Title()?.to_string_lossy(),
+        album_name,
+        status,
+        media_type: m_type,
+        end_time,
+        current_position: position,
+    }))
 }
 
 fn get_raw_status_code(session: &GlobalSystemMediaTransportControlsSession) -> Result<RawStatusNumber, windows::core::Error> {
