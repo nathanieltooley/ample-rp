@@ -45,8 +45,8 @@ pub fn get_current_session_info(session: &GlobalSystemMediaTransportControlsSess
     let player = session.SourceAppUserModelId()?;
     let media_props = session.TryGetMediaPropertiesAsync()?.get()?;
 
-    let status: MediaStatus = get_raw_status_code(&session)?.into();
-    let m_type: MediaType = get_raw_media_type(&session)?.into();
+    let status: MediaStatus = get_raw_status_code(session)?.into();
+    let m_type: MediaType = get_raw_media_type(session)?.into();
 
     let mut artist_name = media_props.Artist()?.to_string_lossy();
     let mut album_name = media_props.AlbumTitle()?.to_string_lossy();
