@@ -68,6 +68,8 @@ fn main() {
     let mut current_has_been_scrobbled = false;
     let mut previously_paused = false;
 
+    let media_listener = sys_media::get_listener().unwrap();
+
     let tray_result = create_tray_icon();
     if let Err(ref err) = tray_result {
         error!("Error while trying to create tray icon: {err}");
@@ -162,12 +164,25 @@ fn main() {
             },
             // Otherwise continue checking currently playing song
             default(TICK_TIME) => {
+                // TODO: Replace this with a Mutex or Channel
                 unsafe {
                     if STOP {
                         break;
                     }
                 }
-                let currently_playing = sys_media::get_current_playing_info();
+
+                let currently_playing = media_listener.get_current_playing_info();
+                // let currently_playing: Result<Option<MediaInfo>, MediaError> = Ok(Some(MediaInfo{
+                //     album_name: "Test".to_owned(),
+                //     player_name: APPLE_MUSIC_ID.to_owned(),
+                //     artist_name: "Test".to_owned(),
+                //     current_position: 0,
+                //     end_time: 1000000,
+                //     song_name: "Test Song".to_owned(),
+                //     status: MediaStatus::Playing,
+                //     media_type: sys_media::MediaType::Music
+
+                // }));
 
                 match currently_playing {
                     Err(error) => {
