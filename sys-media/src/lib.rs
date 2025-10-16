@@ -5,6 +5,8 @@ use windows::Media::Control::GlobalSystemMediaTransportControlsSession;
 pub mod consts;
 mod win_media;
 
+/// An object containing info about whatever is currently playing. This info is set by
+/// external programs and thus may be formatted differently from each other and some info may be absent.
 #[derive(Debug, Clone)]
 pub struct MediaInfo {
     /// Name of the app or executable that started playing this media
@@ -15,6 +17,9 @@ pub struct MediaInfo {
     pub status: MediaStatus,
     pub media_type: MediaType,
     /// Length of media in microseconds
+    // This would be in milliseconds but for some reason Windows has it in
+    // a length of time that doesn't have an actual name (it's like 10x smaller than a microsecond),
+    // but the last few digits aren't significant anyway
     pub end_time: i64,
     /// Amount of time having watched / listened to media in microseconds
     pub current_position: i64,
@@ -97,6 +102,10 @@ impl MediaListener {
 /// Creates a MediaListener for the given OS
 pub fn get_listener() -> Result<MediaListener, MediaError> {
     if cfg!(windows) {
+        // NOTE: For future generations (me) do NOT call this multiple times in a program as it will cause memory leaks and "cpu leaks".
+        // I don't know if that is a real term but CPU usage would increase slowly over the lifespan of the program like a memory leak.
+        // This caused me so much pain because I could not figure out what was causing these problems but I did finally find it.
+        // Maybe I'm silly but I did not see any info or warnings about calling this more than once nor do I really know what the real problem with it is.
         let session = win_media::get_current_session()?;
         Ok(MediaListener::Windows { session })
     } else {
