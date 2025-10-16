@@ -319,15 +319,6 @@ fn clear_status(client: &mut DiscordIpcClient) {
     }
 }
 
-fn prompted_input(prompt: &str) -> String {
-    io::stdout().write_all(prompt.as_bytes()).expect("Could not write to stdout");
-    io::stdout().flush().expect("can't flush :(");
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).expect("Failed to read stdin!");
-    input.trim().to_owned()
-}
-
 fn retry_creds(client: Agent, attempts: usize) -> Result<LastFmCreds, CredsError> {
     let mut creds = None;
     for _ in 0..attempts {
