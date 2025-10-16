@@ -184,6 +184,8 @@ fn main() {
 
                 // }));
 
+                debug!("{currently_playing:#?}");
+
                 match currently_playing {
                     Err(error) => {
                         if error.is_false_error() {
