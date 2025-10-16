@@ -1,7 +1,7 @@
 # Ample
 A simple Discord Rich Presence application and LastFM scrobbler for Apple Music. Currently only supporting Windows with plans to support Linux.
 
-<img width="296" height="642" alt="rich presence example" src="https://github.com/user-attachments/assets/068ac9a8-65fc-4a1c-8699-81316de2303a" />
+<img width="287" height="122" alt="image" src="https://github.com/user-attachments/assets/1567639d-0d63-4737-a70f-1fccaa49eb85" />
 
 ## Installation
 Simply download and extract the latest [release](https://github.com/nathanieltooley/amp-rp/releases) to a folder of your choosing.
