@@ -1,47 +1,29 @@
-use windows::Media::Control::*;
+use ::windows::Media::Control::{GlobalSystemMediaTransportControlsSession, GlobalSystemMediaTransportControlsSessionManager};
 
 use crate::{consts::APPLE_MUSIC_ID, MediaInfo, MediaStatus, MediaType};
 
-// wrapper around i32 that verifies we got this number from windows and not just any i32
-struct RawStatusNumber(i32);
-struct RawMediaTypeNumber(i32);
-
-impl From<RawStatusNumber> for MediaStatus {
-    fn from(value: RawStatusNumber) -> Self {
-        match value.0 {
-            0 => Self::Closed,
-            1 => Self::Opened,
-            2 => Self::Changing,
-            3 => Self::Stopped,
-            4 => Self::Playing,
-            5 => Self::Paused,
-            // SAFETY: Using RawStatusNumber we make sure that the only values we could get here are from the windows API itself
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl From<RawMediaTypeNumber> for MediaType {
-    fn from(value: RawMediaTypeNumber) -> Self {
-        match value.0 {
-            0 => Self::Unknown,
-            1 => Self::Music,
-            2 => Self::Video,
-            3 => Self::Image,
-            // SAFETY: Using RawMediaTypeNumber we make sure that the only values we could get here are from the windows API itself
-            _ => unreachable!(),
-        }
-    }
-}
-
-pub fn get_current_session() -> Result<GlobalSystemMediaTransportControlsSession, windows::core::Error> {
+/// Gets a "SessionManager" from the Windows API.
+///
+/// This function leaks memory due to a bug in the Windows API itself.
+/// See here for more info: https://github.com/microsoft/windows-rs/issues/2061
+///
+/// Limit the amount of times this function is called; preferably only once.
+/// This function blocks until the manager is received.
+pub fn get_session_manager() -> windows_result::Result<GlobalSystemMediaTransportControlsSessionManager> {
     let media_controller = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()?;
-    let media_controller = media_controller.get()?;
-
-    media_controller.GetCurrentSession()
+    media_controller.get()
 }
 
-pub fn get_current_session_info(session: &GlobalSystemMediaTransportControlsSession) -> Result<Option<MediaInfo>, windows::core::Error> {
+/// Gets the current "Session" from the SessionManager.
+/// This will usually get the session that is currently active (i.e. playing music) at the point of the function call.
+pub fn get_current_session(
+    session_manager: &GlobalSystemMediaTransportControlsSessionManager,
+) -> windows_result::Result<GlobalSystemMediaTransportControlsSession> {
+    session_manager.GetCurrentSession()
+}
+
+/// Gets the relevant info about the currently active media from a session.
+pub fn get_current_session_info(session: &GlobalSystemMediaTransportControlsSession) -> windows_result::Result<Option<MediaInfo>> {
     let player = session.SourceAppUserModelId()?;
     let media_props = session.TryGetMediaPropertiesAsync()?.get()?;
 
@@ -86,10 +68,43 @@ pub fn get_current_session_info(session: &GlobalSystemMediaTransportControlsSess
     }))
 }
 
-fn get_raw_status_code(session: &GlobalSystemMediaTransportControlsSession) -> Result<RawStatusNumber, windows::core::Error> {
+// wrapper around i32 that verifies we got this number from windows and not just any i32.
+// probably unneeded but its still nice to have.
+struct RawStatusNumber(i32);
+struct RawMediaTypeNumber(i32);
+
+impl From<RawStatusNumber> for MediaStatus {
+    fn from(value: RawStatusNumber) -> Self {
+        match value.0 {
+            0 => Self::Closed,
+            1 => Self::Opened,
+            2 => Self::Changing,
+            3 => Self::Stopped,
+            4 => Self::Playing,
+            5 => Self::Paused,
+            // SAFETY: Using RawStatusNumber we make sure that the only values we could get here are from the windows API itself
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl From<RawMediaTypeNumber> for MediaType {
+    fn from(value: RawMediaTypeNumber) -> Self {
+        match value.0 {
+            0 => Self::Unknown,
+            1 => Self::Music,
+            2 => Self::Video,
+            3 => Self::Image,
+            // SAFETY: Using RawMediaTypeNumber we make sure that the only values we could get here are from the windows API itself
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn get_raw_status_code(session: &GlobalSystemMediaTransportControlsSession) -> windows_result::Result<RawStatusNumber> {
     Ok(RawStatusNumber(session.GetPlaybackInfo()?.PlaybackStatus()?.0))
 }
 
-fn get_raw_media_type(session: &GlobalSystemMediaTransportControlsSession) -> Result<RawMediaTypeNumber, windows::core::Error> {
+fn get_raw_media_type(session: &GlobalSystemMediaTransportControlsSession) -> windows_result::Result<RawMediaTypeNumber> {
     Ok(RawMediaTypeNumber(session.GetPlaybackInfo()?.PlaybackType()?.Value()?.0))
 }

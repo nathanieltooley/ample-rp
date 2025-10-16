@@ -1,6 +1,6 @@
 use core::fmt;
 
-use windows::Media::Control::GlobalSystemMediaTransportControlsSession;
+use windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
 
 pub mod consts;
 mod win_media;
@@ -86,7 +86,9 @@ impl fmt::Display for MediaError {
 
 /// An object capable of getting information about the currently playing media (Music, Video, etc.).
 pub enum MediaListener {
-    Windows { session: GlobalSystemMediaTransportControlsSession },
+    Windows {
+        session_manager: GlobalSystemMediaTransportControlsSessionManager,
+    },
 }
 
 impl MediaListener {
@@ -94,7 +96,10 @@ impl MediaListener {
     /// Blocks execution if waiting on async or syscalls.
     pub fn get_current_playing_info(&self) -> Result<Option<MediaInfo>, MediaError> {
         match self {
-            MediaListener::Windows { session } => win_media::get_current_session_info(session).map_err(|err| err.into()),
+            MediaListener::Windows { session_manager } => {
+                let session = win_media::get_current_session(session_manager)?;
+                win_media::get_current_session_info(&session).map_err(|err| err.into())
+            }
         }
     }
 }
@@ -102,12 +107,8 @@ impl MediaListener {
 /// Creates a MediaListener for the given OS
 pub fn get_listener() -> Result<MediaListener, MediaError> {
     if cfg!(windows) {
-        // NOTE: For future generations (me) do NOT call this multiple times in a program as it will cause memory leaks and "cpu leaks".
-        // I don't know if that is a real term but CPU usage would increase slowly over the lifespan of the program like a memory leak.
-        // This caused me so much pain because I could not figure out what was causing these problems but I did finally find it.
-        // Maybe I'm silly but I did not see any info or warnings about calling this more than once nor do I really know what the real problem with it is.
-        let session = win_media::get_current_session()?;
-        Ok(MediaListener::Windows { session })
+        let session_manager = win_media::get_session_manager()?;
+        Ok(MediaListener::Windows { session_manager })
     } else {
         // Possible ways I've found to get info on linux:
         // - playerctl
