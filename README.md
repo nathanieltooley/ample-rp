@@ -1,7 +1,7 @@
 # Ample
 A simple Discord Rich Presence application and LastFM scrobbler for Apple Music. Currently only supporting Windows with plans to support Linux.
 
-<img width="287" height="122" alt="image" src="https://github.com/user-attachments/assets/1567639d-0d63-4737-a70f-1fccaa49eb85" />
+<img width="287" height="122" alt="discord rich presence example" src="https://github.com/user-attachments/assets/1567639d-0d63-4737-a70f-1fccaa49eb85" />
 
 ## Installation
 Simply download and extract the latest [release](https://github.com/nathanieltooley/amp-rp/releases) to a folder of your choosing.
@@ -9,8 +9,8 @@ Ample runs in the background so no windows will appear when executed. It's highl
 application when the computer boots. For Windows, look into "Startup Apps" in the settings, the autostart folder, or the Windows "Task Scheduler."
 
 ## LastFM Integration
-Ample supports scrobbling of songs played on Apple Music. It also currently (may change) way of getting cover art.
-Thus without LastFM support enabled, your discord status will only show the song, artist, and album names.
+Ample supports scrobbling of songs played on Apple Music. It is also currently (may change) the only way of getting cover art.
+Thus without LastFM support enabled, your Discord status will only show the song, artist, and album names.
 
 In order for LastFM support to be enabled, you need to provide your LastFM username, password, API Key, and API secret.
 [Click here](https://www.last.fm/api/authentication) for more info about registering an API key and secret and [here](https://www.last.fm/api/accounts)
