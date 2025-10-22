@@ -23,6 +23,7 @@ crossbeam = "0.8.4"
 tray-item = "0.10.0"
 regex = "1.11.3"
 dhat = "0.3.3"
+threadpool = "1.8.1"
 
 [build-dependencies]
 embed-resource = "3.0.6"
