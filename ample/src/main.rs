@@ -1,18 +1,20 @@
 #![cfg_attr(feature = "headless", windows_subsystem = "windows")]
+mod http;
 mod lastfm;
 mod logging;
+mod musicbrainz;
 mod secrets;
 mod uri;
 
 use std::{
     env::VarError,
     error::Error,
-    io::{self, Write},
+    sync::Arc,
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crossbeam::select;
+use crossbeam::{channel::Sender, select};
 use discord_rich_presence::{
     activity::{Assets, Timestamps},
     *,
@@ -22,7 +24,10 @@ use sys_media::{MediaInfo, MediaStatus};
 use tray_item::{TIError, TrayItem};
 use ureq::{Agent, config::Config};
 
-use crate::lastfm::{CredsError, LastFm, LastFmCreds};
+use crate::{
+    lastfm::{LastFm, LastFmCreds},
+    musicbrainz::Musicbrainz,
+};
 
 const AMPLE_DPRC_ID: u64 = 1399214780564246670;
 const TICK_TIME: Duration = Duration::from_secs(5);
@@ -59,6 +64,8 @@ fn main() {
 
     logging::init_log(log_level).unwrap();
 
+    let agent = Agent::new_with_config(Config::builder().http_status_as_error(false).build());
+
     debug!("inited");
 
     let only_am = true;
@@ -78,69 +85,45 @@ fn main() {
     let mut tray = tray_result.ok();
 
     let mut current_song_img = String::new();
-    let (last_fm_tx, last_fm_rx) = crossbeam::channel::bounded::<LastFmThreadMessage>(1);
+    let (blocking_msg_tx, blocking_msg_rx) = crossbeam::channel::bounded::<BlockingThreadMessage>(1);
     let (song_img_tx, song_img_rx) = crossbeam::channel::bounded::<String>(1);
 
-    let last_fm = get_lastfm_creds();
-    if let Some(ref l) = last_fm {
-        let inner_last_fm = l.clone();
-        // LastFM thread
-        info!("Started LastFM loop");
-        thread::spawn(move || {
-            loop {
-                let result = last_fm_rx.recv();
-                debug!("lastfm thread received message");
-                match result {
-                    Ok(msg) => match msg {
-                        LastFmThreadMessage::NowPlaying(info) => {
-                            match inner_last_fm.now_playing(&info.artist_name, &info.song_name, Some(&info.album_name)) {
-                                Err(err) => error!("{err}"),
-                                Ok(_) => info!("LastFM Now Playing: {} - {}", info.song_name, info.artist_name),
-                            }
-                        }
-                        LastFmThreadMessage::AlbumImg(info) => {
-                            let lf_track_info = inner_last_fm.get_track_info(&info.artist_name, &info.song_name);
-                            match lf_track_info {
-                                Ok(track) => {
-                                    debug!("Got track info from LastFM: {track:?}");
-                                    if let Some(album) = track.album {
-                                        let song_img = album
-                                            .images
-                                            .iter()
-                                            .find(|info| info.size == "large")
-                                            .map(|info| info.url.clone())
-                                            .unwrap_or_default();
+    let pool = Arc::new(threadpool::ThreadPool::new(4));
+    let last_fm = get_lastfm_creds(&agent);
 
-                                        if !song_img.is_empty() {
-                                            if let Err(r_err) = song_img_tx.send(song_img) {
-                                                error!("{r_err}");
-                                                return;
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(err) => {
-                                    error!("{err}")
-                                }
-                            }
-                        }
-                        LastFmThreadMessage::Scrobble(info, timestamp) => {
-                            match inner_last_fm.scrobble(&info.artist_name, &info.song_name, timestamp, Some(&info.album_name)) {
-                                Ok(()) => {
-                                    info!("Song, {} by {} has been scrobbled!", info.song_name, info.artist_name);
-                                }
-                                Err(err) => error!("Failed to scrobble current track: {err}"),
-                            }
-                        }
-                    },
-                    Err(err) => {
-                        error!("Error trying to read from channel: {err}");
-                        return;
-                    }
+    let blocking_handler = match last_fm {
+        Some(ref last_fm) => NetworkThreadHandler::new(WebApi::LastFM { last_fm: last_fm.clone() }, song_img_tx),
+        None => NetworkThreadHandler::new(
+            WebApi::Musicbrainz {
+                mb: Musicbrainz::new(agent.clone()),
+            },
+            song_img_tx,
+        ),
+    };
+
+    let blocking_handler = Arc::new(blocking_handler);
+
+    // Blocking Thread
+    let rc_pool = Arc::clone(&pool);
+    info!("Started LastFM loop");
+    pool.execute(move || {
+        loop {
+            let result = blocking_msg_rx.recv();
+            let blocking_handler = Arc::clone(&blocking_handler);
+
+            debug!("blocking thread received message");
+
+            match result {
+                Ok(msg) => {
+                    rc_pool.execute(move || blocking_handler.handle_blocking_thread_msg(msg));
+                }
+                Err(err) => {
+                    error!("Error trying to read from channel: {err}");
+                    return;
                 }
             }
-        });
-    }
+        }
+    });
 
     // Main thread loop
     info!("Started listening loop");
@@ -219,17 +202,16 @@ fn main() {
                                 previously_played_started = Some(SystemTime::now());
                                 previously_played = None;
 
-                                // try to get info from LastFM if we have the creds
                                 if last_fm.is_some() {
-                                    let send_err = last_fm_tx.send(LastFmThreadMessage::NowPlaying(media_info.clone()));
+                                    let send_err = blocking_msg_tx.send(BlockingThreadMessage::NowPlaying(media_info.clone()));
                                     if let Err(err) = send_err {
-                                        error!("Cannot send to LastFM thread: {err}");
+                                        error!("Cannot send to Blocking thread: {err}");
                                     }
+                                }
 
-                                    let send_err = last_fm_tx.send(LastFmThreadMessage::AlbumImg(media_info.clone()));
-                                    if let Err(err) = send_err {
-                                        error!("Cannot send to LastFM thread: {err}");
-                                    }
+                                let send_err = blocking_msg_tx.send(BlockingThreadMessage::AlbumImg(media_info.clone()));
+                                if let Err(err) = send_err {
+                                    error!("Cannot send to Blocking thread: {err}");
                                 }
                             } else if last_fm.is_some() {
                                 // Try to scrobble current song if we have the creds
@@ -242,7 +224,7 @@ fn main() {
                                 // when the user has listened to atleast half of the song
                                 if song_len_secs > 30 && duration.as_secs() > song_len_secs / 2 && !current_has_been_scrobbled {
                                     let timestamp = previously_played_started.unwrap_or_else(SystemTime::now);
-                                    match last_fm_tx.send(LastFmThreadMessage::Scrobble(media_info.clone(), timestamp)) {
+                                    match blocking_msg_tx.send(BlockingThreadMessage::Scrobble(media_info.clone(), timestamp)) {
                                         Ok(()) => current_has_been_scrobbled = true,
                                         Err(err) => error!("Cannot send to LastFM thread: {err}"),
                                     }
@@ -281,10 +263,97 @@ fn main() {
     }
 }
 
-enum LastFmThreadMessage {
+enum BlockingThreadMessage {
     Scrobble(MediaInfo, SystemTime),
     NowPlaying(MediaInfo),
     AlbumImg(MediaInfo),
+}
+
+enum WebApi {
+    LastFM { last_fm: LastFm },
+    Musicbrainz { mb: Musicbrainz },
+}
+/// Wrapper over network api calls so that either LastFM or musicbrainz can be used as needed
+struct NetworkThreadHandler {
+    web_api: WebApi,
+    song_img_tx: Sender<String>,
+}
+
+impl NetworkThreadHandler {
+    fn new(web_api: WebApi, song_img_tx: Sender<String>) -> Self {
+        NetworkThreadHandler { web_api, song_img_tx }
+    }
+
+    fn handle_blocking_thread_msg(&self, msg: BlockingThreadMessage) {
+        match self.web_api {
+            WebApi::LastFM { ref last_fm } => match msg {
+                BlockingThreadMessage::NowPlaying(info) => {
+                    match last_fm
+                        .clone()
+                        .now_playing(info.artist_name.as_str(), info.song_name.as_str(), Some(&info.album_name))
+                    {
+                        Err(err) => error!("{err}"),
+                        Ok(_) => info!("LastFM Now Playing: {} - {}", info.song_name, info.artist_name),
+                    }
+                }
+                BlockingThreadMessage::AlbumImg(info) => {
+                    let lf_track_info = last_fm.get_track_info(&info.artist_name, &info.song_name);
+                    match lf_track_info {
+                        Ok(track) => {
+                            debug!("Got track info from LastFM: {track:?}");
+                            if let Some(album) = track.album {
+                                let song_img = album
+                                    .images
+                                    .iter()
+                                    .find(|info| info.size == "large")
+                                    .map(|info| info.url.clone())
+                                    .unwrap_or_default();
+
+                                if !song_img.is_empty() {
+                                    if let Err(r_err) = self.song_img_tx.send(song_img) {
+                                        error!("{r_err}");
+                                    }
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            error!("{err}")
+                        }
+                    }
+                }
+                BlockingThreadMessage::Scrobble(info, timestamp) => {
+                    match last_fm.scrobble(&info.artist_name, &info.song_name, timestamp, Some(&info.album_name)) {
+                        Ok(()) => {
+                            info!("Song, {} by {} has been scrobbled!", info.song_name, info.artist_name);
+                        }
+                        Err(err) => error!("Failed to scrobble current track: {err}"),
+                    }
+                }
+            },
+            WebApi::Musicbrainz { ref mb } => {
+                if let BlockingThreadMessage::AlbumImg(info) = msg {
+                    match mb.get_release_mbid(&info) {
+                        Ok(mbid) => match mb.get_cover_url(&mbid) {
+                            Ok(Some(url)) => {
+                                if let Err(err) = self.song_img_tx.send(url) {
+                                    error!("failed to send mb album cover url: {err}")
+                                }
+                            }
+                            Ok(None) => {
+                                error!("no cover art exists for album: {} by {}", info.album_name, info.artist_name)
+                            }
+                            Err(err) => {
+                                error!("could not get cover art: {err}")
+                            }
+                        },
+                        Err(err) => {
+                            error!("Could not get musicbrainz mbid: {err}")
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 struct AmpleTray {
@@ -326,6 +395,7 @@ fn get_client() -> DiscordIpcClient {
     let mut client = DiscordIpcClient::new(&format!("{AMPLE_DPRC_ID}")).unwrap();
     // NOTE: Panics because really this entire app can't function without it.
     // In the future, I'll probably make the error output a bit nicer but still
+    // TODO: This fails if discord is not running. We will probably just want to wait until it is open rather than panicing
     client.connect().unwrap();
 
     client
@@ -367,38 +437,10 @@ fn clear_status(client: &mut DiscordIpcClient) {
     }
 }
 
-fn retry_creds(client: Agent, attempts: usize) -> Result<LastFmCreds, CredsError> {
-    let mut creds = None;
-    for _ in 0..attempts {
-        match lastfm::LastFmCreds::get_creds(client.clone()) {
-            Ok(ok_creds) => {
-                creds = Some(ok_creds);
-                break;
-            }
-            Err(err) => {
-                debug!("{err:?}");
-                if let CredsError::RetryableError(_, _) = err {
-                    thread::sleep(Duration::from_secs(1));
-                    continue;
-                } else {
-                    return Err(err);
-                }
-            }
-        }
-    }
+fn get_lastfm_creds(client: &Agent) -> Option<LastFm> {
+    let cred_result = LastFmCreds::get_creds(client.clone());
 
-    creds.ok_or(CredsError::RetryableError(
-        -1,
-        format!("Failed to connect to LastFM after {attempts} attempts"),
-    ))
-}
-
-fn get_lastfm_creds() -> Option<LastFm> {
-    let client = Agent::new_with_config(Config::builder().http_status_as_error(false).build());
-    let retry_attempts = 10;
-    let cred_attempt = retry_creds(client.clone(), retry_attempts);
-
-    match cred_attempt {
+    match cred_result {
         Ok(creds) => {
             info!("Got LastFM credentials");
             Some(lastfm::LastFm::new(client.clone(), creds))
