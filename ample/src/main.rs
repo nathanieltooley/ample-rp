@@ -64,7 +64,12 @@ fn main() {
 
     logging::init_log(log_level).unwrap();
 
-    let agent = Agent::new_with_config(Config::builder().http_status_as_error(false).build());
+    let agent = Agent::new_with_config(
+        Config::builder()
+            .http_status_as_error(false)
+            .user_agent(format!("ample/{} {{nathanieltooley24@gmail.com}}", env!("CARGO_PKG_VERSION")))
+            .build(),
+    );
 
     debug!("inited");
 
