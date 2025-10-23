@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use serde::Deserialize;
 use sys_media::MediaInfo;

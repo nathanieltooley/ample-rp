@@ -1,10 +1,9 @@
 use std::{thread, time::Duration};
 
-use log::{debug, error, info};
+use log::{debug, error};
 use serde::Deserialize;
-use ureq::{Agent, Body, http::request};
+use ureq::Body;
 
-use crate::lastfm::LastFm;
 use ureq::http::Response;
 
 const STARTING_DURATION: Duration = Duration::from_millis(500);

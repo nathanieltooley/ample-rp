@@ -10,7 +10,6 @@ use std::{
     env::VarError,
     error::Error,
     sync::Arc,
-    thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
