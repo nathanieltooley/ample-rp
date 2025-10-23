@@ -7,10 +7,10 @@ use ureq::Agent;
 use std::{
     collections::HashMap,
     env,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::{secrets, uri};
+use crate::{http, secrets, uri};
 const SESSION_ENTRY_NAME: &str = "ampleSession";
 
 const API_ROOT: &str = "https://ws.audioscrobbler.com/2.0";
@@ -26,12 +26,6 @@ pub struct LastFmCreds {
     pub api_key: String,
     pub api_secret: String,
     pub session_token: String,
-}
-
-#[derive(Deserialize)]
-pub struct LastFmErrorResponse {
-    pub error: i64,
-    pub message: String,
 }
 
 #[derive(Deserialize)]
@@ -53,8 +47,8 @@ struct TrackInfoResponse {
 
 #[derive(Deserialize, Debug)]
 pub struct TrackInfo {
-    pub name: String,
-    pub artist: ArtistInfo,
+    // pub name: String,
+    // pub artist: ArtistInfo,
     pub album: Option<AlbumInfo>,
 }
 
@@ -65,9 +59,8 @@ pub struct ArtistInfo {
 
 #[derive(Deserialize, Debug)]
 pub struct AlbumInfo {
-    pub artist: String,
-    pub title: String,
-
+    // pub artist: String,
+    // pub title: String,
     #[serde(rename = "image")]
     pub images: Vec<ImageInfo>,
 }
@@ -95,8 +88,6 @@ pub enum CredsError {
     MissingApiSecret,
     #[error("Http error: {0}")]
     Http(#[from] ureq::Error),
-    #[error("{1}")]
-    RetryableError(i64, String),
 }
 
 impl LastFm {
@@ -122,16 +113,11 @@ impl LastFm {
         params.insert("format", "json");
         params.insert("api_sig", &sig);
 
-        let mut rep = self.client.post(API_ROOT).send_form(params)?;
-        let body = rep.body_mut().read_to_string()?;
-
-        // ureq::http_status_as_error is set to false so that this can happen
-        // inbetween the error. There might be a better way of doing this but im not sure.
-        debug!("{body}");
-
-        if rep.status().is_client_error() || rep.status().is_server_error() {
-            return Err(ureq::Error::StatusCode(rep.status().as_u16()));
-        }
+        let _ = http::backoff_request(
+            || self.client.post(API_ROOT).send_form(&params),
+            http::CollisionStrategy::LastFM,
+            http::DEFAULT_MAX_DUR,
+        )?;
 
         Ok(())
     }
@@ -152,14 +138,11 @@ impl LastFm {
         params.insert("format", "json");
         params.insert("api_sig", &sig);
 
-        let mut rep = self.client.post(API_ROOT).send_form(params)?;
-        let body = rep.body_mut().read_to_string()?;
-
-        debug!("{body}");
-
-        if rep.status().is_client_error() || rep.status().is_server_error() {
-            return Err(ureq::Error::StatusCode(rep.status().as_u16()));
-        }
+        let _ = http::backoff_request(
+            || self.client.post(API_ROOT).send_form(&params),
+            http::CollisionStrategy::LastFM,
+            http::DEFAULT_MAX_DUR,
+        )?;
 
         Ok(())
     }
@@ -174,16 +157,8 @@ impl LastFm {
 
         let uri = create_param_uri(&params, None);
         debug!("{uri}");
-        let mut rep = self.client.get(uri).call()?;
-        let body = rep.body_mut().read_to_string()?;
-
-        debug!("{body}");
-
-        if rep.status().is_client_error() || rep.status().is_server_error() {
-            return Err(ureq::Error::StatusCode(rep.status().as_u16()));
-        }
-
-        let track: TrackInfoResponse = serde_json::from_str(&body)?;
+        let str_body = http::backoff_request(|| self.client.get(&uri).call(), http::CollisionStrategy::LastFM, Duration::from_secs(5))?;
+        let track: TrackInfoResponse = serde_json::from_str(&str_body)?;
 
         Ok(track.track)
     }
@@ -215,25 +190,16 @@ impl LastFmCreds {
                     map_params.insert("api_sig", &sig);
                     map_params.insert("format", "json");
 
-                    debug!("sig: {sig}");
-                    debug!("uri: {API_ROOT}");
+                    debug!("lastfm sig: {sig}");
+                    debug!("lastfm uri: {API_ROOT}");
 
-                    let mut rep = client.post(API_ROOT).send_form(map_params)?;
+                    let rep = http::backoff_request(
+                        || client.post(API_ROOT).send_form(&map_params),
+                        http::CollisionStrategy::LastFM,
+                        http::DEFAULT_MAX_DUR,
+                    )?;
 
-                    let body = rep.body_mut().read_to_string()?;
-
-                    debug!("{body}");
-                    if rep.status().is_client_error() || rep.status().is_server_error() {
-                        return match serde_json::from_str::<LastFmErrorResponse>(&body) {
-                            Ok(err) => match err.error {
-                                8 | 11 | 16 | 29 => Err(CredsError::RetryableError(err.error, err.message)),
-                                _ => Err(CredsError::Http(ureq::Error::StatusCode(rep.status().as_u16()))),
-                            },
-                            Err(_) => Err(CredsError::Http(ureq::Error::StatusCode(rep.status().as_u16()))),
-                        };
-                    }
-
-                    let json_response: AuthMobileSessionResponse = serde_json::from_str(&body).map_err(ureq::Error::Json)?;
+                    let json_response: AuthMobileSessionResponse = serde_json::from_str(&rep).map_err(ureq::Error::Json)?;
                     let key = json_response.session.key;
 
                     session_entry.set_password(&key)?;
