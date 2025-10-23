@@ -75,11 +75,12 @@ pub struct ImageInfo {
 
 #[derive(Error, Debug)]
 pub enum CredsError {
-    // static lifetime of key since it should be a string literal
-    #[error("Error obtaining environment variable, {0}, because {1}")]
-    Env(&'static str, env::VarError),
     #[error("Error obtaining credentials from keyring: {0}")]
     Keyring(#[from] keyring::Error),
+    #[error("LastFM api key has not been set! Check the README for more info about setting your LastFM api key")]
+    MissingApiKey,
+    #[error("LastFM username has not been set! Check the README for more info about setting your LastFM username")]
+    MissingUsername,
     #[error("LastFM password has not been set! Check the README for more info about setting your LastFM password.")]
     MissingPassword,
     #[error("LastFM secret has not been set! Check the README for more info about setting your LastFM API secret.")]
@@ -167,8 +168,8 @@ impl LastFm {
 /// open a web browser.
 impl LastFmCreds {
     pub fn get_creds(client: Agent) -> Result<LastFmCreds, CredsError> {
-        let api_key = env::var("AMPLE_FM_API_KEY").map_err(|var_error| CredsError::Env("AMPLE_FM_API_KEY", var_error))?;
-        let username = env::var("AMPLE_FM_USERNAME").map_err(|var_error| CredsError::Env("AMPLE_FM_USERNAME", var_error))?;
+        let api_key = env::var("AMPLE_FM_API_KEY").map_err(|_| CredsError::MissingApiKey)?;
+        let username = env::var("AMPLE_FM_USERNAME").map_err(|_| CredsError::MissingUsername)?;
 
         let password = secrets::get_lastfm_password().ok_or(CredsError::MissingPassword)?;
         let secret = secrets::get_lastfm_secret().ok_or(CredsError::MissingApiSecret)?;
