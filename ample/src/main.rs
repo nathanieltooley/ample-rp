@@ -10,6 +10,7 @@ use std::{
     env::VarError,
     error::Error,
     sync::Arc,
+    thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -151,7 +152,7 @@ fn main() {
             },
             // Otherwise continue checking currently playing song
             default(TICK_TIME) => {
-                // TODO: Replace this with a Mutex or Channel
+                // TODO: Replace this with a Channel or otherwise make this an instant stop not relying on tick loop
                 unsafe {
                     if STOP {
                         break;
@@ -397,10 +398,22 @@ impl AmpleTray {
 
 fn get_client() -> DiscordIpcClient {
     let mut client = DiscordIpcClient::new(&format!("{AMPLE_DPRC_ID}")).unwrap();
+    let mut error_logged = false;
     // NOTE: Panics because really this entire app can't function without it.
     // In the future, I'll probably make the error output a bit nicer but still
     // TODO: This fails if discord is not running. We will probably just want to wait until it is open rather than panicing
-    client.connect().unwrap();
+    loop {
+        match client.connect() {
+            Ok(()) => break,
+            Err(err) => {
+                if !error_logged {
+                    error_logged = true;
+                    error!("Failed to connect to Discord: {err}. Make sure it is running!");
+                }
+                thread::sleep(Duration::from_secs(10));
+            }
+        }
+    }
 
     client
 }
