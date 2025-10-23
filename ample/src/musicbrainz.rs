@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde::Deserialize;
 use sys_media::MediaInfo;
 use ureq::Agent;
@@ -26,11 +24,9 @@ struct CoverArtResponse {
 
 #[derive(Debug, Deserialize)]
 struct CoverArtImage {
-    types: Vec<String>,
     front: bool,
     back: bool,
     image: String,
-    thumbnails: HashMap<String, String>,
 }
 
 impl CoverArtResponse {

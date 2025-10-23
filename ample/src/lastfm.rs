@@ -35,9 +35,7 @@ struct AuthMobileSessionResponse {
 
 #[derive(Deserialize)]
 struct AuthMobileSessionResponseInner {
-    pub name: String,
     pub key: String,
-    pub subscriber: i64,
 }
 
 #[derive(Deserialize, Debug)]

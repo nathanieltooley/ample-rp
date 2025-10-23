@@ -23,7 +23,7 @@ pub enum CollisionStrategy {
 #[derive(Debug, Deserialize)]
 struct LastFmError {
     error: u32,
-    message: String,
+    // message: String,
 }
 
 /// Makes a retriable http request with automatic backoff
