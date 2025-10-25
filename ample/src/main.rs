@@ -69,6 +69,15 @@ fn main() {
 
     debug!("inited");
 
+    let (exit_tx, exit_rx) = crossbeam::channel::bounded::<bool>(1);
+
+    let tray_result = AmpleTray::create(exit_tx);
+    if let Err(ref err) = tray_result {
+        error!("Error while trying to create tray icon: {err}");
+    }
+
+    let mut tray = tray_result.ok();
+
     let only_am = true;
     let mut client = get_client();
     let mut previously_played: Option<MediaInfo> = None;
@@ -77,13 +86,6 @@ fn main() {
     let mut previously_paused = false;
 
     let media_listener = sys_media::get_listener().unwrap();
-
-    let tray_result = AmpleTray::create();
-    if let Err(ref err) = tray_result {
-        error!("Error while trying to create tray icon: {err}");
-    }
-
-    let mut tray = tray_result.ok();
 
     let mut current_song_img = String::new();
     let (blocking_msg_tx, blocking_msg_rx) = crossbeam::channel::bounded::<BlockingThreadMessage>(1);
@@ -130,6 +132,11 @@ fn main() {
     info!("Started listening loop");
     loop {
         select! {
+            recv(exit_rx) -> msg => {
+                if msg.unwrap() {
+                    break;
+                }
+            }
             // Instantly update status cover img when we get it from LastFM
             recv(song_img_rx) -> msg => {
                 match msg {
@@ -148,13 +155,6 @@ fn main() {
             },
             // Otherwise continue checking currently playing song
             default(TICK_TIME) => {
-                // TODO: Replace this with a Channel or otherwise make this an instant stop not relying on tick loop
-                unsafe {
-                    if STOP {
-                        break;
-                    }
-                }
-
                 let currently_playing = media_listener.get_current_playing_info();
                 // let currently_playing: Result<Option<MediaInfo>, MediaError> = Ok(Some(MediaInfo{
                 //     album_name: "Test".to_owned(),
@@ -363,13 +363,15 @@ struct AmpleTray {
 }
 
 impl AmpleTray {
-    fn create() -> Result<AmpleTray, TIError> {
+    fn create(exit_channel: Sender<bool>) -> Result<AmpleTray, TIError> {
         let mut tray = TrayItem::new("Ample", tray_item::IconSource::Resource("ample_icon"))?;
         let id = tray.inner_mut().add_label_with_id("Currently Listening to: Nothing :(")?;
 
         tray.inner_mut().set_tooltip("Ample")?;
-        tray.add_menu_item("Exit", || unsafe {
-            STOP = true;
+        tray.add_menu_item("Exit", move || {
+            if let Err(err) = exit_channel.send(true) {
+                error!("Failed to close program: {err}")
+            }
         })?;
 
         Ok(AmpleTray {
