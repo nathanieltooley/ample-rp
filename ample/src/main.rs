@@ -44,21 +44,17 @@ fn main() {
     let _profiler = dhat::Profiler::new_heap();
 
     if let Err(err) = dotenvy::dotenv() {
+        // none of this information actually gets logged because the logging init has to happen after this.
+        // tbh not sure what to do about that
         if err.not_found() {
-            info!("No .env file found. Skipping...")
+            println!("No .env file found. Skipping...")
         } else {
-            error!("{err}");
+            println!("{err}");
             return;
         }
     }
 
-    let debug = match std::env::var("AMPLE_DEBUG") {
-        Ok(debug_var) => debug_var == "true",
-        Err(err) => match err {
-            VarError::NotPresent => false,
-            _ => panic!("{err}"),
-        },
-    };
+    let debug = std::env::var("AMPLE_DEBUG").is_ok_and(|debug_var| debug_var == "true");
 
     let log_level = if debug { LevelFilter::Debug } else { LevelFilter::Info };
 
