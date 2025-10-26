@@ -9,8 +9,10 @@ Ample runs in the background so no windows will appear when executed. It's highl
 application when the computer boots. For Windows, look into "Startup Apps" in the settings, the autostart folder, or the Windows "Task Scheduler."
 
 ## LastFM Integration
-Ample supports scrobbling of songs played on Apple Music. It is also currently (may change) the only way of getting cover art.
-Thus without LastFM support enabled, your Discord status will only show the song, artist, and album names.
+Ample supports scrobbling of songs played on Apple Music. While Ample can provide most features without LastFM support, the public API used for album cover images
+([Cover Art Archive](https://coverartarchive.org/)) is subject to more rate limiting while LastFM is more lenient. It may be the case using LastFM's api results
+in better performance though it should usually be negligible. 
+
 
 In order for LastFM support to be enabled, you need to provide your LastFM username, password, API Key, and API secret.
 [Click here](https://www.last.fm/api/authentication) for more info about registering an API key and secret and [here](https://www.last.fm/api/accounts)
@@ -32,7 +34,7 @@ Ample will look for the secret in an entry called **ampleSecret** and the passwo
 
 ## Troubleshooting
 Logs will be stored on Windows in "AppData\Roaming\ample\config\logs", and on Linux at "~/.config/ample/config/logs."
-Setting the environment variable "AMPLE_DEBUG" will print debug logging info.
+Setting the environment variable "AMPLE_DEBUG" will print debug logging info but will require resetting the program.
 
 ## Building from source
 You will need [Rust](https://rustup.rs/) installed. After that, clone the repo onto your computer.
