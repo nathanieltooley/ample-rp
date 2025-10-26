@@ -7,7 +7,6 @@ mod secrets;
 mod uri;
 
 use std::{
-    env::VarError,
     error::Error,
     sync::Arc,
     thread,
@@ -36,8 +35,6 @@ const APP_NAME: &str = "ample";
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
-
-static mut STOP: bool = false;
 
 fn main() {
     #[cfg(feature = "dhat-heap")]
@@ -174,7 +171,12 @@ fn main() {
                     Err(error) => {
                         if error.is_false_error() {
                             debug!("No media is paused or playing!");
-                            clear_status(&mut client);
+                            if let Err(err) = clear_status(&mut client) {
+                                error!("Failed to clear discord status: {err}");
+                                info!("Resetting Discord connection...");
+
+                                client = get_client();
+                            }
 
                             if let Some(ref mut tray) = tray {
                                 if let Err(error) = tray.clear() {
@@ -234,6 +236,9 @@ fn main() {
 
                             if let Err(error) = update_status(&mut client, &media_info, &current_song_img) {
                                 error!("Error while setting activity: {error}");
+                                info!("Resetting Discord connection...");
+
+                                client = get_client();
                             } else if previously_played.is_none() {
                                 info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name);
                             }
@@ -247,7 +252,12 @@ fn main() {
                             previously_played = Some(media_info);
                         } else if !previously_paused {
                             debug!("Media is paused. Clearing activity");
-                            clear_status(&mut client);
+                            if let Err(err) = clear_status(&mut client) {
+                                error!("Error while clearing activity: {err}");
+                                info!("Resetting Discord connection...");
+
+                                client = get_client();
+                            }
 
                             if let Some(ref mut tray) = tray {
                                 if let Err(error) = tray.clear() {
@@ -399,7 +409,6 @@ fn get_client() -> DiscordIpcClient {
     let mut error_logged = false;
     // NOTE: Panics because really this entire app can't function without it.
     // In the future, I'll probably make the error output a bit nicer but still
-    // TODO: This fails if discord is not running. We will probably just want to wait until it is open rather than panicing
     loop {
         match client.connect() {
             Ok(()) => break,
@@ -446,10 +455,8 @@ fn update_status(client: &mut DiscordIpcClient, media_info: &MediaInfo, cover_ur
     client.set_activity(activity)
 }
 
-fn clear_status(client: &mut DiscordIpcClient) {
-    if let Err(err) = client.clear_activity() {
-        error!("Error while clearing activity: {err}");
-    }
+fn clear_status(client: &mut DiscordIpcClient) -> Result<(), Box<dyn Error>> {
+    client.clear_activity()
 }
 
 fn get_lastfm_creds(client: &Agent) -> Option<LastFm> {
