@@ -32,14 +32,7 @@ const AMPLE_DPRC_ID: u64 = 1399214780564246670;
 const TICK_TIME: Duration = Duration::from_secs(5);
 const APP_NAME: &str = "ample";
 
-#[cfg(feature = "dhat-heap")]
-#[global_allocator]
-static ALLOC: dhat::Alloc = dhat::Alloc;
-
 fn main() {
-    #[cfg(feature = "dhat-heap")]
-    let _profiler = dhat::Profiler::new_heap();
-
     if let Err(err) = dotenvy::dotenv() {
         // none of this information actually gets logged because the logging init has to happen after this.
         // tbh not sure what to do about that
