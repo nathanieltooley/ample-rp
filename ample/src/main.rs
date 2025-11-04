@@ -53,6 +53,12 @@ fn main() {
 
     logging::init_log(log_level).unwrap();
 
+    std::panic::set_hook(Box::new(|panic_info| {
+        // SAFETY: Payloads should only be strs
+        let panic_msg = unsafe { panic_info.payload_as_str().unwrap_unchecked() };
+        error!("panic: {panic_msg}");
+    }));
+
     let agent = Agent::new_with_config(
         Config::builder()
             .http_status_as_error(false)
