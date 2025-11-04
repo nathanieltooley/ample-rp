@@ -46,19 +46,18 @@ impl RollingLogger {
 
             let re = Regex::new(&format!(r"{}-?(\d*).log", self.file_prefix)).expect("invalid regex");
             // If the log file has an ID in its name
-            if let Some(caps) = re.captures(&entry_name) {
-                if let Some(m) = caps.get(1) {
-                    if !m.is_empty() {
-                        let index = match m.as_str().parse::<u64>() {
-                            Ok(i) => i,
-                            Err(_) => continue,
-                        };
+            if let Some(caps) = re.captures(&entry_name)
+                && let Some(m) = caps.get(1)
+                && !m.is_empty()
+            {
+                let index = match m.as_str().parse::<u64>() {
+                    Ok(i) => i,
+                    Err(_) => continue,
+                };
 
-                        files.push(RollingLogFile { file_id: index });
+                files.push(RollingLogFile { file_id: index });
 
-                        continue;
-                    }
-                }
+                continue;
             }
 
             // If the log file does not have an ID in its name but still matchs "[file_prefix].log"
