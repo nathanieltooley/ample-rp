@@ -133,6 +133,7 @@ fn main() {
         select! {
             recv(exit_rx) -> msg => {
                 if msg.unwrap() {
+                    info!("Manually stopping program...");
                     break;
                 }
             }
