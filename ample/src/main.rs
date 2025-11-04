@@ -6,6 +6,7 @@ mod musicbrainz;
 mod secrets;
 mod uri;
 
+use core::panic;
 use std::{
     error::Error,
     sync::Arc,
@@ -31,6 +32,8 @@ use crate::{
 const AMPLE_DPRC_ID: u64 = 1399214780564246670;
 const TICK_TIME: Duration = Duration::from_secs(5);
 const APP_NAME: &str = "ample";
+
+const DISCORD_CLOSED_MSG: &str = "Not active. Make sure Discord is running!";
 
 fn main() {
     if let Err(err) = dotenvy::dotenv() {
@@ -168,6 +171,12 @@ fn main() {
                                 error!("Failed to clear discord status: {err}");
                                 info!("Resetting Discord connection...");
 
+                                if let Some(ref mut tray) = tray {
+                                    if let Err(error) = tray.set_not_running() {
+                                        error!("failed to update tray status: {error}")
+                                    }
+                                }
+
                                 client = get_client();
                             }
 
@@ -248,6 +257,12 @@ fn main() {
                             if let Err(err) = clear_status(&mut client) {
                                 error!("Error while clearing activity: {err}");
                                 info!("Resetting Discord connection...");
+
+                                if let Some(ref mut tray) = tray {
+                                    if let Err(error) = tray.set_not_running() {
+                                        error!("failed to update tray status: {error}")
+                                    }
+                                }
 
                                 client = get_client();
                             }
@@ -368,10 +383,10 @@ struct AmpleTray {
 impl AmpleTray {
     fn create(exit_channel: Sender<bool>) -> Result<AmpleTray, TIError> {
         let mut tray = TrayItem::new("Ample", tray_item::IconSource::Resource("ample_icon"))?;
-        let id = tray.inner_mut().add_label_with_id("Currently Listening to: Nothing :(")?;
+        let id = tray.inner_mut().add_label_with_id(DISCORD_CLOSED_MSG)?;
 
         tray.inner_mut().set_tooltip("Ample")?;
-        tray.add_menu_item("Exit", move || {
+        tray.add_menu_item("Stop", move || {
             if let Err(err) = exit_channel.send(true) {
                 error!("Failed to close program: {err}")
             }
@@ -386,7 +401,7 @@ impl AmpleTray {
     fn clear(&mut self) -> Result<(), TIError> {
         self.tray_item
             .inner_mut()
-            .set_label("Currently Listening to: Nothing :(", self.status_label_id)
+            .set_label("Currently Listening to: Nothing", self.status_label_id)
     }
 
     fn update(&mut self, media_info: &MediaInfo) -> Result<(), TIError> {
@@ -395,8 +410,13 @@ impl AmpleTray {
             self.status_label_id,
         )
     }
+
+    fn set_not_running(&mut self) -> Result<(), TIError> {
+        self.tray_item.inner_mut().set_label(DISCORD_CLOSED_MSG, self.status_label_id)
+    }
 }
 
+/// Will block until a connection with the Discord Client can be established
 fn get_client() -> DiscordIpcClient {
     let mut client = DiscordIpcClient::new(&format!("{AMPLE_DPRC_ID}")).unwrap();
     let mut error_logged = false;
