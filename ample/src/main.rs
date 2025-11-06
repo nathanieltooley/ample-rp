@@ -6,7 +6,6 @@ mod musicbrainz;
 mod secrets;
 mod uri;
 
-use core::panic;
 use std::{
     error::Error,
     sync::Arc,
@@ -178,20 +177,18 @@ fn main() {
                                 error!("Failed to clear discord status: {err}");
                                 info!("Resetting Discord connection...");
 
-                                if let Some(ref mut tray) = tray {
-                                    if let Err(error) = tray.set_not_running() {
+                                if let Some(ref mut tray) = tray
+                                    && let Err(error) = tray.set_not_running() {
                                         error!("failed to update tray status: {error}")
                                     }
-                                }
 
                                 client = get_client();
                             }
 
-                            if let Some(ref mut tray) = tray {
-                                if let Err(error) = tray.clear() {
+                            if let Some(ref mut tray) = tray
+                                && let Err(error) = tray.clear() {
                                     error!("failed to clear tray status: {error}")
                                 }
-                            }
                         } else {
                             error!("{error}")
                         }
@@ -252,11 +249,10 @@ fn main() {
                                 info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name);
                             }
 
-                            if let Some(ref mut tray) = tray {
-                                if let Err(error) = tray.update(&media_info) {
+                            if let Some(ref mut tray) = tray
+                                && let Err(error) = tray.update(&media_info) {
                                     error!("failed to update tray status: {error}");
                                 }
-                            }
 
                             previously_played = Some(media_info);
                         } else if !previously_paused {
@@ -265,20 +261,18 @@ fn main() {
                                 error!("Error while clearing activity: {err}");
                                 info!("Resetting Discord connection...");
 
-                                if let Some(ref mut tray) = tray {
-                                    if let Err(error) = tray.set_not_running() {
+                                if let Some(ref mut tray) = tray
+                                    && let Err(error) = tray.set_not_running() {
                                         error!("failed to update tray status: {error}")
                                     }
-                                }
 
                                 client = get_client();
                             }
 
-                            if let Some(ref mut tray) = tray {
-                                if let Err(error) = tray.clear() {
+                            if let Some(ref mut tray) = tray
+                                && let Err(error) = tray.clear() {
                                     error!("failed to clear tray status: {error}")
                                 }
-                            }
                             previously_paused = true;
                         }
                     }
@@ -335,10 +329,10 @@ impl NetworkThreadHandler {
                                     .map(|info| info.url.clone())
                                     .unwrap_or_default();
 
-                                if !song_img.is_empty() {
-                                    if let Err(r_err) = self.song_img_tx.send(song_img) {
-                                        error!("{r_err}");
-                                    }
+                                if !song_img.is_empty()
+                                    && let Err(r_err) = self.song_img_tx.send(song_img)
+                                {
+                                    error!("{r_err}");
                                 }
                             }
                         }
