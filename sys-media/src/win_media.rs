@@ -1,4 +1,5 @@
 use ::windows::Media::Control::{GlobalSystemMediaTransportControlsSession, GlobalSystemMediaTransportControlsSessionManager};
+use log::warn;
 
 use crate::{consts::APPLE_MUSIC_ID, MediaInfo, MediaStatus, MediaType};
 
@@ -40,16 +41,23 @@ pub fn get_current_session_info(session: &GlobalSystemMediaTransportControlsSess
         let apple_artist_album_string = media_props.Artist()?.to_string_lossy();
         let mut splits = apple_artist_album_string.split('—');
 
-        artist_name = splits
-            .next()
-            .expect("apple music has changed how they display artist and album names")
-            .trim()
-            .to_owned();
-        album_name = splits
-            .next()
-            .expect("apple music has changed how they display artist and album names")
-            .trim()
-            .to_owned();
+        artist_name = match splits.next() {
+            None => {
+                // Maybe this should return an error?
+                // but idk when this actually errors
+                warn!("incorrect artist name for Apple Music: {apple_artist_album_string}");
+                artist_name
+            }
+            Some(separated_artist_name) => separated_artist_name.trim().to_owned(),
+        };
+
+        album_name = match splits.next() {
+            None => {
+                warn!("incorrect album name for Apple Music: {apple_artist_album_string}");
+                album_name
+            }
+            Some(separated_album_name) => separated_album_name.trim().to_owned(),
+        };
     }
 
     let timeline_info = session.GetTimelineProperties()?;
