@@ -6,5 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+log = "0.4.28"
 windows = { version = "0.61.3", features = ["Media_Control"] }
 windows-result = "0.3.4"
