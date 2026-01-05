@@ -34,7 +34,7 @@ impl PartialEq for MediaInfo {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaStatus {
     Closed,
     Opened,
@@ -110,23 +110,7 @@ pub fn get_listener() -> Result<MediaListener, MediaError> {
         let session_manager = win_media::get_session_manager()?;
         Ok(MediaListener::Windows { session_manager })
     } else {
-        // Possible ways I've found to get info on linux:
-        // - playerctl
-        // This could be done the "dirty" way by using processes and piping that info inside the library.
-        //
-        // The other option is using the playerctl "library" but this seems more complicated than just a libplayerctl sort of thing.
-        // It also looks like to use the playerctl "library," we'd have run Glib's EventLoop and listen for events? Which would require
-        // a more complicated API or possibly an explicit separation of functions. Basically, windows would have a function and linux would need an
-        // init or start function and then a normal function? Maybe have the function agnostic but init on windows is a no-op?
-        // https://github.com/altdesktop/playerctl/tree/master
-        // For library route: https://gtk-rs.org/
-        //
-        // In either case this does introduce a dependency on playerctl which is outside of Rust. I'm not exactly sure how to depend explicitly
-        // on a system binary.
-        //
-        // - from scratch?
-        // If there is a nice way to "ask" the OS about info from the current media player, we might be able to sidestep any gtk / GLib stuff.
-        // However, I fear this is actually not simple to do.
+        // BETTER IDEA: https://crates.io/crates/mpris
         todo!()
     }
 }

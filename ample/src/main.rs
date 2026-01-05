@@ -195,8 +195,7 @@ fn main() {
                     }
                     Ok(Some(media_info)) => {
                         let valid_player = !only_am || media_info.player_name == sys_media::consts::APPLE_MUSIC_ID;
-                        if let MediaStatus::Playing = media_info.status
-                            && valid_player
+                        if media_info.status == MediaStatus::Playing && valid_player
                         {
                             previously_paused = false;
                             // New song
