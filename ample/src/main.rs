@@ -33,7 +33,11 @@ const AMPLE_DPRC_ID: u64 = 1399214780564246670;
 const TICK_TIME: Duration = Duration::from_secs(5);
 const APP_NAME: &str = "ample";
 
-const DISCORD_CLOSED_MSG: &str = "Not active. Make sure Discord is running!";
+const SONG_WAITING_MSG: &str = "Waiting for Discord connection. Make sure Discord is running!";
+const SONG_INACTIVE_MSG: &str = "Currently Playing: Nothing";
+
+const DISCORD_CONNECTION_MSG: &str = "Discord Status: Connected";
+const DISCORD_DISCONN_MSG: &str = "Discord Status: Disconnected";
 
 fn main() {
     if let Err(err) = dotenvy::dotenv() {
@@ -132,14 +136,24 @@ fn main() {
     loop {
         if discord_client.should_retry() {
             if config.wait_for_discord {
-                if let Err(err) = tray.set_not_running() {
-                    error!("Failed to clear system tray: {err}");
+                if let Err(err) = tray.update_discord_status(TrayDiscordStatus::Disconnected) {
+                    error!("Failed to update system tray: {err}");
+                }
+
+                if let Err(err) = tray.update_song(TraySongStatus::WaitingForDiscord) {
+                    error!("Failed to update system tray: {err}")
                 }
 
                 discord_client.retry_blocking();
             } else {
+                if let Err(err) = tray.update_discord_status(TrayDiscordStatus::Disconnected) {
+                    error!("Failed to update system tray: {err}");
+                }
+
                 discord_client.retry();
             }
+        } else if let Err(err) = tray.update_discord_status(TrayDiscordStatus::Connected) {
+            error!("Failed to update system tray: {err}")
         }
 
         select! {
@@ -195,7 +209,7 @@ fn main() {
                                 discord_client.mark_for_retry();
                             }
 
-                            if let Err(err) = tray.clear() {
+                            if let Err(err) = tray.update_song(TraySongStatus::NotPlaying) {
                                 error!("Failed to clear tray status: {err}")
                             }
 
@@ -258,7 +272,7 @@ fn main() {
                                 info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name);
                             }
 
-                            if let Err(err) = tray.update(&media_info) {
+                            if let Err(err) = tray.update_song(TraySongStatus::Playing(&media_info)) {
                                 error!("failed to update tray status: {err}");
                             }
 
@@ -270,8 +284,8 @@ fn main() {
                                 info!("Will reset Discord connection next tick");
                             }
 
-                            if let Err(err) = tray.clear() {
-                                error!("failed to clear tray status: {err}")
+                            if let Err(err) = tray.update_song(TraySongStatus::NotPlaying) {
+                                error!("failed to update tray status: {err}")
                             }
 
                             previously_paused = true;
@@ -379,7 +393,19 @@ impl NetworkThreadHandler {
 
 struct AmpleTray {
     tray_item: Option<TrayItem>,
-    status_label_id: u32,
+    song_status_id: u32,
+    discord_status_id: u32,
+}
+
+enum TrayDiscordStatus {
+    Connected,
+    Disconnected,
+}
+
+enum TraySongStatus<'a> {
+    Playing(&'a MediaInfo),
+    WaitingForDiscord,
+    NotPlaying,
 }
 
 // Class designed to abstract some Tray manipulation stuff and also optional values.
@@ -393,17 +419,18 @@ struct AmpleTray {
 impl AmpleTray {
     fn new(exit_channel: Sender<bool>) -> AmpleTray {
         let mut tray = Self::_create_tray();
-        let mut id = 0;
+        let mut ids: (u32, u32) = (0, 0);
         match tray.as_mut() {
             Err(err) => {
                 error!("Error while trying to create tray item: {err}");
             }
-            Ok(tray) => id = Self::_add_labels(tray, exit_channel).unwrap_or(0),
+            Ok(tray) => ids = Self::_add_labels(tray, exit_channel).unwrap_or((0, 0)),
         }
 
         AmpleTray {
             tray_item: tray.ok(),
-            status_label_id: id,
+            song_status_id: ids.0,
+            discord_status_id: ids.1,
         }
     }
     fn _create_tray() -> Result<TrayItem, TIError> {
@@ -414,39 +441,39 @@ impl AmpleTray {
         Ok(tray)
     }
 
-    fn _add_labels(tray: &mut TrayItem, exit_channel: Sender<bool>) -> Result<u32, TIError> {
-        let id = tray.inner_mut().add_label_with_id(DISCORD_CLOSED_MSG)?;
+    fn _add_labels(tray: &mut TrayItem, exit_channel: Sender<bool>) -> Result<(u32, u32), TIError> {
+        let song_status_id = tray.inner_mut().add_label_with_id(SONG_INACTIVE_MSG)?;
+        let discord_status_id = tray.inner_mut().add_label_with_id(DISCORD_DISCONN_MSG)?;
         tray.add_menu_item("Stop", move || {
             if let Err(err) = exit_channel.send(true) {
                 error!("Failed to close program: {err}")
             }
         })?;
 
-        Ok(id)
+        Ok((song_status_id, discord_status_id))
     }
 
-    fn clear(&mut self) -> Result<(), TIError> {
+    fn update_song(&mut self, status: TraySongStatus) -> Result<(), TIError> {
         if let Some(tray) = self.tray_item.as_mut() {
-            tray.inner_mut().set_label("Currently Listening to: Nothing", self.status_label_id)
+            match status {
+                TraySongStatus::Playing(media_info) => tray.inner_mut().set_label(
+                    &format!("Currently listening to {} by {}", media_info.song_name, media_info.artist_name),
+                    self.song_status_id,
+                ),
+                TraySongStatus::WaitingForDiscord => tray.inner_mut().set_label(SONG_WAITING_MSG, self.song_status_id),
+                TraySongStatus::NotPlaying => tray.inner_mut().set_label(SONG_INACTIVE_MSG, self.song_status_id),
+            }
         } else {
             Ok(())
         }
     }
 
-    fn update(&mut self, media_info: &MediaInfo) -> Result<(), TIError> {
+    fn update_discord_status(&mut self, status: TrayDiscordStatus) -> Result<(), TIError> {
         if let Some(tray) = self.tray_item.as_mut() {
-            tray.inner_mut().set_label(
-                &format!("Currently listening to {} by {}", media_info.song_name, media_info.artist_name),
-                self.status_label_id,
-            )
-        } else {
-            Ok(())
-        }
-    }
-
-    fn set_not_running(&mut self) -> Result<(), TIError> {
-        if let Some(tray) = self.tray_item.as_mut() {
-            tray.inner_mut().set_label(DISCORD_CLOSED_MSG, self.status_label_id)
+            match status {
+                TrayDiscordStatus::Connected => tray.inner_mut().set_label(DISCORD_CONNECTION_MSG, self.discord_status_id),
+                TrayDiscordStatus::Disconnected => tray.inner_mut().set_label(DISCORD_DISCONN_MSG, self.discord_status_id),
+            }
         } else {
             Ok(())
         }
