@@ -58,6 +58,8 @@ pub enum MediaError {
 }
 
 impl MediaError {
+    /// When getting info from Windows about what is currently playing, the windows-rs API returns
+    /// and error if nothing is playing. This is not an error. So this function makes sure its a real error.
     pub fn is_false_error(&self) -> bool {
         // this should eventually be refutable when other variants are added
         #[allow(irrefutable_let_patterns)]

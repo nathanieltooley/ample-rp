@@ -1,4 +1,5 @@
 #![cfg_attr(feature = "headless", windows_subsystem = "windows")]
+mod config;
 mod http;
 mod lastfm;
 mod logging;
@@ -65,19 +66,15 @@ fn main() {
             .build(),
     );
 
-    debug!("inited");
-
     let (exit_tx, exit_rx) = crossbeam::channel::bounded::<bool>(1);
 
-    let tray_result = AmpleTray::create(exit_tx);
-    if let Err(ref err) = tray_result {
-        error!("Error while trying to create tray icon: {err}");
-    }
+    let mut tray = AmpleTray::new(exit_tx);
 
-    let mut tray = tray_result.ok();
-
+    let config = config::load_config();
     let only_am = true;
-    let mut client = get_client();
+
+    let mut discord_client = AmpleDiscordClient::init();
+
     let mut previously_played: Option<MediaInfo> = None;
     let mut previously_played_started: Option<SystemTime> = None;
     let mut current_has_been_scrobbled = false;
@@ -92,6 +89,9 @@ fn main() {
     let pool = Arc::new(threadpool::ThreadPool::new(4));
     let last_fm = get_lastfm_creds(&agent);
 
+    debug!("inited");
+
+    // ---- second thread setup ----
     let blocking_handler = match last_fm {
         Some(ref last_fm) => NetworkThreadHandler::new(WebApi::LastFM { last_fm: last_fm.clone() }, song_img_tx),
         None => NetworkThreadHandler::new(
@@ -104,7 +104,6 @@ fn main() {
 
     let blocking_handler = Arc::new(blocking_handler);
 
-    // Blocking Thread
     let rc_pool = Arc::clone(&pool);
     info!("Started LastFM loop");
     pool.execute(move || {
@@ -125,10 +124,24 @@ fn main() {
             }
         }
     });
+    info!("Started blocking thread");
+    // ------------------------------
 
     // Main thread loop
-    info!("Started listening loop");
+    info!("Started main thread");
     loop {
+        if discord_client.should_retry() {
+            if config.wait_for_discord {
+                if let Err(err) = tray.set_not_running() {
+                    error!("Failed to clear system tray: {err}");
+                }
+
+                discord_client.retry_blocking();
+            } else {
+                discord_client.retry();
+            }
+        }
+
         select! {
             recv(exit_rx) -> msg => {
                 if msg.unwrap() {
@@ -140,7 +153,9 @@ fn main() {
             recv(song_img_rx) -> msg => {
                 match msg {
                     Ok(cover_url) => {
-                        match update_status(&mut client, previously_played.as_ref().expect("Cover update should only happen after a song has started to play"), &cover_url) {
+                        match discord_client.update_status(
+                            previously_played.as_ref().expect("Cover update should only happen after a song has started to play"), &cover_url)
+                        {
                             Ok(()) => info!("Status img updated to: {cover_url}"),
                             Err(err) => error!("Error trying to update status: {err}")
                         }
@@ -170,27 +185,22 @@ fn main() {
                 debug!("{currently_playing:#?}");
 
                 match currently_playing {
-                    Err(error) => {
-                        if error.is_false_error() {
+                    Err(media_error) => {
+                        if media_error.is_false_error() {
                             debug!("No media is paused or playing!");
-                            if let Err(err) = clear_status(&mut client) {
+                            if let Err(err) = discord_client.clear_status() {
                                 error!("Failed to clear discord status: {err}");
-                                info!("Resetting Discord connection...");
+                                info!("Will reset Discord connection next tick");
 
-                                if let Some(ref mut tray) = tray
-                                    && let Err(error) = tray.set_not_running() {
-                                        error!("failed to update tray status: {error}")
-                                    }
-
-                                client = get_client();
+                                discord_client.mark_for_retry();
                             }
 
-                            if let Some(ref mut tray) = tray
-                                && let Err(error) = tray.clear() {
-                                    error!("failed to clear tray status: {error}")
-                                }
+                            if let Err(err) = tray.clear() {
+                                error!("Failed to clear tray status: {err}")
+                            }
+
                         } else {
-                            error!("{error}")
+                            error!("{media_error}")
                         }
                     }
                     Ok(Some(media_info)) => {
@@ -239,39 +249,31 @@ fn main() {
                                 }
                             }
 
-                            if let Err(error) = update_status(&mut client, &media_info, &current_song_img) {
-                                error!("Error while setting activity: {error}");
-                                info!("Resetting Discord connection...");
+                            if let Err(err) = discord_client.update_status(&media_info, &current_song_img) {
+                                error!("Error while setting activity: {err}");
+                                info!("Will reset Discord connection next tick");
 
-                                client = get_client();
+                                discord_client.mark_for_retry();
                             } else if previously_played.is_none() {
                                 info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name);
                             }
 
-                            if let Some(ref mut tray) = tray
-                                && let Err(error) = tray.update(&media_info) {
-                                    error!("failed to update tray status: {error}");
-                                }
+                            if let Err(err) = tray.update(&media_info) {
+                                error!("failed to update tray status: {err}");
+                            }
 
                             previously_played = Some(media_info);
                         } else if !previously_paused {
                             debug!("Media is paused. Clearing activity");
-                            if let Err(err) = clear_status(&mut client) {
+                            if let Err(err) = discord_client.clear_status() {
                                 error!("Error while clearing activity: {err}");
-                                info!("Resetting Discord connection...");
-
-                                if let Some(ref mut tray) = tray
-                                    && let Err(error) = tray.set_not_running() {
-                                        error!("failed to update tray status: {error}")
-                                    }
-
-                                client = get_client();
+                                info!("Will reset Discord connection next tick");
                             }
 
-                            if let Some(ref mut tray) = tray
-                                && let Err(error) = tray.clear() {
-                                    error!("failed to clear tray status: {error}")
-                                }
+                            if let Err(err) = tray.clear() {
+                                error!("failed to clear tray status: {err}")
+                            }
+
                             previously_paused = true;
                         }
                     }
@@ -376,100 +378,202 @@ impl NetworkThreadHandler {
 }
 
 struct AmpleTray {
-    tray_item: TrayItem,
+    tray_item: Option<TrayItem>,
     status_label_id: u32,
 }
 
+// Class designed to abstract some Tray manipulation stuff and also optional values.
+// I don't really know if it is advisable to hide optional values like this but it makes
+// the main loop code easier to read. Also it's not the main loops responsibility to care about
+// a faulty or missing tray item
+//
+// TODO: Currently, no errors are shown in the clear, update, and set_not_running functions
+// if we failed to create the TrayItem in the first place, it only shows up new. It might be nice
+// to log to the user that we're trying to update the TrayItem but it doesn't exist.
 impl AmpleTray {
-    fn create(exit_channel: Sender<bool>) -> Result<AmpleTray, TIError> {
+    fn new(exit_channel: Sender<bool>) -> AmpleTray {
+        let mut tray = Self::_create_tray();
+        let mut id = 0;
+        match tray.as_mut() {
+            Err(err) => {
+                error!("Error while trying to create tray item: {err}");
+            }
+            Ok(tray) => id = Self::_add_labels(tray, exit_channel).unwrap_or(0),
+        }
+
+        AmpleTray {
+            tray_item: tray.ok(),
+            status_label_id: id,
+        }
+    }
+    fn _create_tray() -> Result<TrayItem, TIError> {
         let mut tray = TrayItem::new("Ample", tray_item::IconSource::Resource("ample_icon"))?;
-        let id = tray.inner_mut().add_label_with_id(DISCORD_CLOSED_MSG)?;
 
         tray.inner_mut().set_tooltip("Ample")?;
+
+        Ok(tray)
+    }
+
+    fn _add_labels(tray: &mut TrayItem, exit_channel: Sender<bool>) -> Result<u32, TIError> {
+        let id = tray.inner_mut().add_label_with_id(DISCORD_CLOSED_MSG)?;
         tray.add_menu_item("Stop", move || {
             if let Err(err) = exit_channel.send(true) {
                 error!("Failed to close program: {err}")
             }
         })?;
 
-        Ok(AmpleTray {
-            tray_item: tray,
-            status_label_id: id,
-        })
+        Ok(id)
     }
 
     fn clear(&mut self) -> Result<(), TIError> {
-        self.tray_item
-            .inner_mut()
-            .set_label("Currently Listening to: Nothing", self.status_label_id)
+        if let Some(tray) = self.tray_item.as_mut() {
+            tray.inner_mut().set_label("Currently Listening to: Nothing", self.status_label_id)
+        } else {
+            Ok(())
+        }
     }
 
     fn update(&mut self, media_info: &MediaInfo) -> Result<(), TIError> {
-        self.tray_item.inner_mut().set_label(
-            &format!("Currently listening to {} by {}", media_info.song_name, media_info.artist_name),
-            self.status_label_id,
-        )
+        if let Some(tray) = self.tray_item.as_mut() {
+            tray.inner_mut().set_label(
+                &format!("Currently listening to {} by {}", media_info.song_name, media_info.artist_name),
+                self.status_label_id,
+            )
+        } else {
+            Ok(())
+        }
     }
 
     fn set_not_running(&mut self) -> Result<(), TIError> {
-        self.tray_item.inner_mut().set_label(DISCORD_CLOSED_MSG, self.status_label_id)
+        if let Some(tray) = self.tray_item.as_mut() {
+            tray.inner_mut().set_label(DISCORD_CLOSED_MSG, self.status_label_id)
+        } else {
+            Ok(())
+        }
     }
 }
 
-/// Will block until a connection with the Discord Client can be established
-fn get_client() -> DiscordIpcClient {
-    let mut client = DiscordIpcClient::new(&format!("{AMPLE_DPRC_ID}")).unwrap();
-    let mut error_logged = false;
-    // NOTE: Panics because really this entire app can't function without it.
-    // In the future, I'll probably make the error output a bit nicer but still
-    loop {
-        match client.connect() {
-            Ok(()) => break,
+struct AmpleDiscordClient {
+    inner: Option<DiscordIpcClient>,
+    /// True if a previous retry attempt had failed previously.
+    /// Used to make sure the logs aren't filled with errors about failing to connect to Discord.
+    previously_retried: bool,
+}
+
+impl AmpleDiscordClient {
+    fn init() -> Self {
+        let client_result = Self::get_client();
+        let mut retried = false;
+        if let Err(err) = client_result {
+            error!("Failed to connect client to Discord: {err}");
+            retried = true;
+        }
+        // Result<()> -> Result<client>
+        AmpleDiscordClient {
+            inner: Self::get_client().ok(),
+            previously_retried: retried,
+        }
+    }
+
+    fn get_client() -> Result<DiscordIpcClient, Box<dyn Error + 'static>> {
+        let mut client = DiscordIpcClient::new(&format!("{AMPLE_DPRC_ID}")).unwrap();
+        let connect_result = client.connect();
+
+        // Result<()> -> Result<client>
+        connect_result.map(|_| client)
+    }
+
+    // Will attempt to get the client once. Errors are logged but success is not guaranteed.
+    fn retry(&mut self) {
+        let inner = Self::get_client();
+        match inner {
+            Ok(client) => {
+                self.inner = Some(client);
+                self.previously_retried = false;
+            }
             Err(err) => {
-                if !error_logged {
-                    error_logged = true;
-                    error!("Failed to connect to Discord: {err}. Make sure it is running!");
+                if !self.previously_retried {
+                    error!("Failed to connect client to Discord: {err}");
+                    self.previously_retried = true;
                 }
-                thread::sleep(Duration::from_secs(10));
+
+                self.inner = None;
             }
         }
     }
 
-    client
-}
+    /// Will attempt to indefinitely retry its connection to Discord.
+    fn retry_blocking(&mut self) {
+        let mut client = DiscordIpcClient::new(&format!("{AMPLE_DPRC_ID}")).unwrap();
+        let mut error_logged = false;
+        loop {
+            match client.connect() {
+                Ok(()) => break,
+                Err(err) => {
+                    if !error_logged {
+                        error_logged = true;
+                        error!("Failed to connect to Discord: {err}. Make sure it is running!");
+                    }
+                    thread::sleep(Duration::from_secs(10));
+                }
+            }
+        }
 
-fn update_status(client: &mut DiscordIpcClient, media_info: &MediaInfo, cover_url: &str) -> Result<(), Box<dyn Error>> {
-    let now = SystemTime::now();
-    let dur = now.duration_since(UNIX_EPOCH).expect("epoch should hopefully always be in the past");
-
-    let start_dur = dur.saturating_sub(Duration::from_micros(media_info.current_position as u64));
-    let remaining_time = media_info.end_time - media_info.current_position;
-    let end_dur = dur.saturating_add(Duration::from_micros(remaining_time as u64));
-
-    let state_name = format!("{} - {}", media_info.artist_name, media_info.album_name);
-
-    let mut activity = activity::Activity::new()
-        // TODO: This function fails silently to set the activity when the song title, and thus details, is one of two things:
-        // - Too short
-        // - Starts with a number
-        // I tried to get this to work with the song 7 by the Catfish and the Bottlemen. Thus I don't
-        // know if it fails because of the 7 or because its only 1 character. Need to test this out.
-        .details(&media_info.song_name)
-        .state(&state_name)
-        .activity_type(activity::ActivityType::Listening)
-        .timestamps(Timestamps::new().start(start_dur.as_secs() as i64).end(end_dur.as_secs() as i64));
-
-    if !cover_url.is_empty() {
-        activity = activity.assets(Assets::new().large_image(cover_url))
+        self.inner = Some(client)
     }
 
-    debug!("setting status");
+    fn should_retry(&self) -> bool {
+        self.inner.is_none()
+    }
 
-    client.set_activity(activity)
-}
+    /// Used to mark this client as needing to retry its connection to Discord.
+    /// Usually occurs when some error occurs during status setting.
+    fn mark_for_retry(&mut self) {
+        self.inner = None;
+        self.previously_retried = false;
+    }
 
-fn clear_status(client: &mut DiscordIpcClient) -> Result<(), Box<dyn Error>> {
-    client.clear_activity()
+    fn clear_status(&mut self) -> Result<(), Box<dyn Error>> {
+        if let Some(client) = self.inner.as_mut() {
+            return client.clear_activity();
+        }
+
+        Ok(())
+    }
+
+    fn update_status(&mut self, media_info: &MediaInfo, cover_url: &str) -> Result<(), Box<dyn Error>> {
+        if let Some(client) = self.inner.as_mut() {
+            let now = SystemTime::now();
+            let dur = now.duration_since(UNIX_EPOCH).expect("epoch should hopefully always be in the past");
+
+            let start_dur = dur.saturating_sub(Duration::from_micros(media_info.current_position as u64));
+            let remaining_time = media_info.end_time - media_info.current_position;
+            let end_dur = dur.saturating_add(Duration::from_micros(remaining_time as u64));
+
+            let state_name = format!("{} - {}", media_info.artist_name, media_info.album_name);
+
+            let mut activity = activity::Activity::new()
+                // TODO: This function fails silently to set the activity when the song title, and thus details, is one of two things:
+                // - Too short
+                // - Starts with a number
+                // I tried to get this to work with the song 7 by the Catfish and the Bottlemen. Thus I don't
+                // know if it fails because of the 7 or because its only 1 character. Need to test this out.
+                .details(&media_info.song_name)
+                .state(&state_name)
+                .activity_type(activity::ActivityType::Listening)
+                .timestamps(Timestamps::new().start(start_dur.as_secs() as i64).end(end_dur.as_secs() as i64));
+
+            if !cover_url.is_empty() {
+                activity = activity.assets(Assets::new().large_image(cover_url))
+            }
+
+            debug!("setting status");
+
+            return client.set_activity(activity);
+        }
+
+        Ok(())
+    }
 }
 
 fn get_lastfm_creds(client: &Agent) -> Option<LastFm> {
