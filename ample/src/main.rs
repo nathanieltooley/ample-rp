@@ -25,6 +25,7 @@ use tray_item::{TIError, TrayItem};
 use ureq::{Agent, config::Config};
 
 use crate::{
+    config::AmpleConfig,
     lastfm::{LastFm, LastFmCreds},
     musicbrainz::Musicbrainz,
 };
@@ -63,7 +64,7 @@ fn main() {
         error!("panic: {panic_msg}");
     }));
 
-    let agent = Agent::new_with_config(
+    let http_agent = Agent::new_with_config(
         Config::builder()
             .http_status_as_error(false)
             .user_agent(format!("ample/{} {{nathanieltooley24@gmail.com}}", env!("CARGO_PKG_VERSION")))
@@ -74,11 +75,12 @@ fn main() {
 
     let mut tray = AmpleTray::new(exit_tx);
 
-    let config = config::load_config();
+    let config = AmpleConfig::load_config();
     let only_am = true;
 
     let mut discord_client = AmpleDiscordClient::init();
 
+    // main loop state
     let mut previously_played: Option<MediaInfo> = None;
     let mut previously_played_started: Option<SystemTime> = None;
     let mut current_has_been_scrobbled = false;
@@ -91,7 +93,7 @@ fn main() {
     let (song_img_tx, song_img_rx) = crossbeam::channel::bounded::<String>(1);
 
     let pool = Arc::new(threadpool::ThreadPool::new(4));
-    let last_fm = get_lastfm_creds(&agent);
+    let last_fm = get_lastfm_creds(&http_agent);
 
     debug!("inited");
 
@@ -100,7 +102,7 @@ fn main() {
         Some(ref last_fm) => NetworkThreadHandler::new(WebApi::LastFM { last_fm: last_fm.clone() }, song_img_tx),
         None => NetworkThreadHandler::new(
             WebApi::Musicbrainz {
-                mb: Musicbrainz::new(agent.clone()),
+                mb: Musicbrainz::new(http_agent.clone()),
             },
             song_img_tx,
         ),
@@ -113,13 +115,13 @@ fn main() {
     pool.execute(move || {
         loop {
             let result = blocking_msg_rx.recv();
-            let blocking_handler = Arc::clone(&blocking_handler);
+            let blocking_handler_clone = Arc::clone(&blocking_handler);
 
             debug!("blocking thread received message");
 
             match result {
                 Ok(msg) => {
-                    rc_pool.execute(move || blocking_handler.handle_blocking_thread_msg(msg));
+                    rc_pool.execute(move || blocking_handler_clone.handle_blocking_thread_msg(msg));
                 }
                 Err(err) => {
                     error!("Error trying to read from channel: {err}");
@@ -134,8 +136,10 @@ fn main() {
     // Main thread loop
     info!("Started main thread");
     loop {
+        // check to see if we need to retry our connection to discord
         if discord_client.should_retry() {
             if config.wait_for_discord {
+                // either block indefinitely until we connect to discord
                 if let Err(err) = tray.update_discord_status(TrayDiscordStatus::Disconnected) {
                     error!("Failed to update system tray: {err}");
                 }
@@ -146,6 +150,7 @@ fn main() {
 
                 discord_client.retry_blocking();
             } else {
+                // or just try again next time
                 if let Err(err) = tray.update_discord_status(TrayDiscordStatus::Disconnected) {
                     error!("Failed to update system tray: {err}");
                 }
@@ -199,6 +204,7 @@ fn main() {
                 debug!("{currently_playing:#?}");
 
                 match currently_playing {
+                    // nothing playing or a failure to get info
                     Err(media_error) => {
                         if media_error.is_false_error() {
                             debug!("No media is paused or playing!");
@@ -217,9 +223,9 @@ fn main() {
                             error!("{media_error}")
                         }
                     }
+                    // something playing
                     Ok(Some(media_info)) => {
-                        let valid_player = !only_am || media_info.player_name == sys_media::consts::APPLE_MUSIC_ID;
-                        if media_info.status == MediaStatus::Playing && valid_player
+                        if media_info.status == MediaStatus::Playing && config.is_valid_media_source(&media_info.player_name)
                         {
                             previously_paused = false;
                             // New song
@@ -234,6 +240,7 @@ fn main() {
                                 previously_played_started = Some(SystemTime::now());
                                 previously_played = None;
 
+                                // tell lastfm we are listening to the current song
                                 if last_fm.is_some() {
                                     let send_err = blocking_msg_tx.send(BlockingThreadMessage::NowPlaying(media_info.clone()));
                                     if let Err(err) = send_err {
@@ -241,6 +248,7 @@ fn main() {
                                     }
                                 }
 
+                                // get album cover
                                 let send_err = blocking_msg_tx.send(BlockingThreadMessage::AlbumImg(media_info.clone()));
                                 if let Err(err) = send_err {
                                     error!("Cannot send to Blocking thread: {err}");
@@ -269,6 +277,8 @@ fn main() {
 
                                 discord_client.mark_for_retry();
                             } else if previously_played.is_none() {
+                                // this log is guarded to make sure it only logs the first time the loop
+                                // updates the discord activity
                                 info!("Activity set to listening to {} - {}", media_info.song_name, media_info.artist_name);
                             }
 
@@ -278,6 +288,7 @@ fn main() {
 
                             previously_played = Some(media_info);
                         } else if !previously_paused {
+                            // clear everything while paused
                             debug!("Media is paused. Clearing activity");
                             if let Err(err) = discord_client.clear_status() {
                                 error!("Error while clearing activity: {err}");
