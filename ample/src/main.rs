@@ -25,7 +25,6 @@ use tray_item::{TIError, TrayItem};
 use ureq::{Agent, config::Config};
 
 use crate::{
-    config::AmpleConfig,
     lastfm::{LastFm, LastFmCreds},
     musicbrainz::Musicbrainz,
 };
@@ -71,13 +70,18 @@ fn main() {
             .build(),
     );
 
+    debug!("basic init done");
+
     let (exit_tx, exit_rx) = crossbeam::channel::bounded::<bool>(1);
 
     let mut tray = AmpleTray::new(exit_tx);
 
-    let config = AmpleConfig::load_config();
-    let only_am = true;
+    debug!("loading config file");
+    let config = config::load_config();
 
+    info!("Loading Discord IPC client");
+    // TODO: it looks like connecting RP to Discord is heavily rate limited (can maybe only connect once every like 30 seconds or so).
+    // maybe look into this
     let mut discord_client = AmpleDiscordClient::init();
 
     // main loop state
@@ -86,6 +90,7 @@ fn main() {
     let mut current_has_been_scrobbled = false;
     let mut previously_paused = false;
 
+    debug!("getting media listener");
     let media_listener = sys_media::get_listener().unwrap();
 
     let mut current_song_img = String::new();
@@ -93,9 +98,8 @@ fn main() {
     let (song_img_tx, song_img_rx) = crossbeam::channel::bounded::<String>(1);
 
     let pool = Arc::new(threadpool::ThreadPool::new(4));
+    info!("Attempting to load LastFM credentials");
     let last_fm = get_lastfm_creds(&http_agent);
-
-    debug!("inited");
 
     // ---- second thread setup ----
     let blocking_handler = match last_fm {
@@ -111,15 +115,17 @@ fn main() {
     let blocking_handler = Arc::new(blocking_handler);
 
     let rc_pool = Arc::clone(&pool);
-    info!("Started LastFM loop");
+    debug!("Started LastFM loop");
     pool.execute(move || {
         loop {
             let result = blocking_msg_rx.recv();
+            // Rust-analyzer thinks this is unused?
             let blocking_handler_clone = Arc::clone(&blocking_handler);
 
             debug!("blocking thread received message");
 
             match result {
+                // and this too?
                 Ok(msg) => {
                     rc_pool.execute(move || blocking_handler_clone.handle_blocking_thread_msg(msg));
                 }
@@ -130,11 +136,11 @@ fn main() {
             }
         }
     });
-    info!("Started blocking thread");
+    debug!("Started blocking thread");
     // ------------------------------
 
     // Main thread loop
-    info!("Started main thread");
+    info!("Main loop started. Listening for changes");
     loop {
         // check to see if we need to retry our connection to discord
         if discord_client.should_retry() {
