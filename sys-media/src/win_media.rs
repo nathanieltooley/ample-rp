@@ -1,7 +1,7 @@
 use ::windows::Media::Control::{GlobalSystemMediaTransportControlsSession, GlobalSystemMediaTransportControlsSessionManager};
 use log::warn;
 
-use crate::{consts::APPLE_MUSIC_ID, MediaInfo, MediaStatus, MediaType};
+use crate::{consts::WIN_APPLE_MUSIC_ID, MediaInfo, MediaStatus, MediaType};
 
 /// Gets a "SessionManager" from the Windows API.
 ///
@@ -37,7 +37,7 @@ pub fn get_current_session_info(session: &GlobalSystemMediaTransportControlsSess
     // Apple Music combines the Artist and Album names together with a dash,
     // however this dash is not a normal '-', its actually '—', which I didn't know was a different character.
     // Neat.
-    if player.to_string_lossy() == APPLE_MUSIC_ID {
+    if player.to_string_lossy() == WIN_APPLE_MUSIC_ID {
         let apple_artist_album_string = media_props.Artist()?.to_string_lossy();
         let mut splits = apple_artist_album_string.split('—');
 

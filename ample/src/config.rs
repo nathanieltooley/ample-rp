@@ -20,7 +20,7 @@ impl AmpleConfig {
         AmpleConfig {
             // this will have to be updated when / if linux support is added
             // the program name will definitely be different
-            valid_media_sources: vec![sys_media::consts::APPLE_MUSIC_ID.to_owned()],
+            valid_media_sources: vec![sys_media::consts::WIN_APPLE_MUSIC_ID.to_owned()],
             wait_for_discord: false,
         }
     }
