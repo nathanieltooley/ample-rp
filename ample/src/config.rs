@@ -52,9 +52,11 @@ pub fn load_config() -> AmpleConfig {
                 match fs::File::create_new(&config_file_path) {
                     Ok(mut new_config) => {
                         let default = AmpleConfig::default_config();
-                        if let Err(write_error) =
-                            new_config.write_all(serde_json::to_vec(&default).expect("default config should be serializable").as_slice())
-                        {
+                        if let Err(write_error) = new_config.write_all(
+                            serde_json::to_string_pretty(&default)
+                                .expect("default config should be serializable")
+                                .as_bytes(),
+                        ) {
                             error!("Failed to write default config: {write_error}");
                         }
                     }
