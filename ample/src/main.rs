@@ -14,7 +14,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crossbeam::{channel::Sender, select};
+use crossbeam::{
+    channel::{Receiver, RecvError, Sender},
+    select,
+};
 use discord_rich_presence::{
     activity::{Assets, Timestamps},
     *,
@@ -145,6 +148,7 @@ fn main() {
         // check to see if we need to retry our connection to discord
         if discord_client.should_retry() {
             if config.wait_for_discord {
+                info!("Attempting to connect to Discord. Will block execution until connection is reestablished.");
                 // either block indefinitely until we connect to discord
                 if let Err(err) = tray.update_discord_status(TrayDiscordStatus::Disconnected) {
                     error!("Failed to update system tray: {err}");
@@ -154,7 +158,17 @@ fn main() {
                     error!("Failed to update system tray: {err}")
                 }
 
-                discord_client.retry_blocking();
+                match discord_client.retry_blocking(exit_rx.clone()) {
+                    Ok(completed) => {
+                        if !completed {
+                            debug!("Exiting!");
+                            break;
+                        }
+                    }
+                    Err(recv_error) => {
+                        error!("Failed to read from exit channel while blocking Discord reconnect: {recv_error}");
+                    }
+                }
             } else {
                 // or just try again next time
                 if let Err(err) = tray.update_discord_status(TrayDiscordStatus::Disconnected) {
@@ -546,24 +560,32 @@ impl AmpleDiscordClient {
         }
     }
 
-    /// Will attempt to indefinitely retry its connection to Discord.
-    fn retry_blocking(&mut self) {
+    /// Will attempt to indefinitely retry its connection to Discord. Returns whether it completed the connection.
+    fn retry_blocking(&mut self, exit_rx: Receiver<bool>) -> Result<bool, RecvError> {
         let mut client = DiscordIpcClient::new(&format!("{AMPLE_DPRC_ID}")).unwrap();
         let mut error_logged = false;
         loop {
-            match client.connect() {
-                Ok(()) => break,
-                Err(err) => {
-                    if !error_logged {
-                        error_logged = true;
-                        error!("Failed to connect to Discord: {err}. Make sure it is running!");
+            select! {
+                // if the read fails we want to stop too
+                recv(exit_rx) -> exit => if exit? {
+                    return Ok(false);
+                },
+                default(Duration::from_secs(10)) => {
+                    match client.connect() {
+                        Ok(()) => break,
+                        Err(err) => {
+                            if !error_logged {
+                                error_logged = true;
+                                error!("Failed to connect to Discord: {err}. Make sure it is running!");
+                            }
+                        }
                     }
-                    thread::sleep(Duration::from_secs(10));
                 }
             }
         }
 
-        self.inner = Some(client)
+        self.inner = Some(client);
+        Ok(true)
     }
 
     fn should_retry(&self) -> bool {
