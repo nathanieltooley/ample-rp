@@ -11,7 +11,6 @@ mod uri;
 use std::{
     error::Error,
     sync::Arc,
-    thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -117,7 +116,6 @@ fn main() {
     pool.execute(move || {
         loop {
             let result = blocking_msg_rx.recv();
-            // Rust-analyzer thinks this is unused?
             let blocking_handler_clone = Arc::clone(&blocking_handler);
 
             debug!("blocking thread received message");
