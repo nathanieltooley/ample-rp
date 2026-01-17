@@ -1,7 +1,7 @@
 # Ample
 A simple Discord Rich Presence application and LastFM scrobbler for Apple Music. Currently only supporting Windows with plans to support Linux.
 
-<img width="280" height="112" alt="Discord Rich Presence example. It show the Discord status of an individual, showing that they are currently listening to Twilight Funzone, by the band Macseal, on Apple Music" src="https://github.com/user-attachments/assets/aed3e3c8-028d-41ba-867e-d5b4909fa039" />
+<img width="280" height="112" alt="Discord Rich Presence example. It displays the Discord status of an individual, showing that they are currently listening to Twilight Funzone, by the band Macseal, on Apple Music" src="https://github.com/user-attachments/assets/aed3e3c8-028d-41ba-867e-d5b4909fa039" />
 
 ## Installation
 Simply download and extract the latest [release](https://github.com/nathanieltooley/amp-rp/releases) to a folder of your choosing.
