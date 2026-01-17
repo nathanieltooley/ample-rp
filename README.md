@@ -1,7 +1,7 @@
 # Ample
 A simple Discord Rich Presence application and LastFM scrobbler for Apple Music. Currently only supporting Windows with plans to support Linux.
 
-<img width="287" height="122" alt="discord rich presence example" src="https://github.com/user-attachments/assets/1567639d-0d63-4737-a70f-1fccaa49eb85" />
+<img width="280" height="112" alt="Discord Rich Presence example. It show the Discord status of an individual, showing that they are currently listening to Twilight Funzone, by the band Macseal, on Apple Music" src="https://github.com/user-attachments/assets/aed3e3c8-028d-41ba-867e-d5b4909fa039" />
 
 ## Installation
 Simply download and extract the latest [release](https://github.com/nathanieltooley/amp-rp/releases) to a folder of your choosing.
@@ -12,7 +12,6 @@ application when the computer boots. For Windows, look into "Startup Apps" in th
 Ample supports scrobbling of songs played on Apple Music. While Ample can provide most features without LastFM support, the public API used for album cover images
 ([Cover Art Archive](https://coverartarchive.org/)) is subject to more rate limiting while LastFM is more lenient. It may be the case using LastFM's api results
 in better performance though it should usually be negligible. 
-
 
 In order for LastFM support to be enabled, you need to provide your LastFM username, password, API Key, and API secret.
 [Click here](https://www.last.fm/api/authentication) for more info about registering an API key and secret and [here](https://www.last.fm/api/accounts)
@@ -30,11 +29,18 @@ If you feel uncomfortable keeping this info in a plain text file, the second way
 For Windows, this is the [Credential Manager](https://support.microsoft.com/en-us/windows/credential-manager-in-windows-1b5c916a-6a16-889f-8581-fc16e8165ac0).
 For other platforms, refer to [keyring's supported options](https://crates.io/crates/keyring) under the header **Platforms**.
 
-Ample will look for the secret in an entry called **ampleSecret** and the password in an entry called **amplePassword**
+Ample will look for the secret in an entry called **ampleSecret** and the password in an entry called **amplePassword**. However, the *username* and *api_key* still need to be
+given using environment variables.
 
 ## Troubleshooting
-Logs will be stored on Windows in "AppData\Roaming\ample\config\logs", and on Linux at "~/.config/ample/config/logs."
+Logs will be stored on Windows in `AppData\Roaming\ample\config\logs`, and on Linux at `~/.config/ample/config/logs.`
 Setting the environment variable "AMPLE_DEBUG" will print debug logging info but will require resetting the program.
+
+## Configuration
+The config file is located at `AppData\Roaming\ample\config\ample_config.json` on Windows, and `~/.config/ample/config/ample_config.json` on Linux.
+
+- `wait_for_discord` (bool): If true, Ample will pause execution until Discord can be connected to. If false, Ample will attempt to scrobble without Discord. If that fails, then the program will idle. Default value: `false`
+- `valid_media_sources` (list): A list of executable names that Ample will listen to and send to Discord and LastFM. Default value: `["AppleMusic.exe"]`
 
 ## Building from source
 You will need [Rust](https://rustup.rs/) installed. After that, clone the repo onto your computer.
