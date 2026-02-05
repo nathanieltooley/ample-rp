@@ -9,6 +9,7 @@ mod tray;
 mod uri;
 
 use std::{
+    borrow::Cow,
     error::Error,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -23,7 +24,7 @@ use discord_rich_presence::{
     *,
 };
 use log::*;
-use sys_media::{MediaInfo, MediaStatus};
+use sys_media::{MediaError, MediaInfo, MediaStatus, consts::WIN_APPLE_MUSIC_ID};
 use ureq::{Agent, config::Config};
 
 use crate::{
@@ -35,6 +36,9 @@ use crate::{
 const AMPLE_DPRC_ID: u64 = 1399214780564246670;
 const TICK_TIME: Duration = Duration::from_secs(5);
 const APP_NAME: &str = "ample";
+
+const DISCORD_MAX_LENGTH: usize = 128;
+const TRUNC_LEN: usize = DISCORD_MAX_LENGTH - 10; // A bit smaller so that a "..." can be put after the truncated name
 
 fn main() {
     if let Err(err) = dotenvy::dotenv() {
@@ -202,16 +206,16 @@ fn main() {
             // Otherwise continue checking currently playing song
             default(TICK_TIME) => {
                 let currently_playing = media_listener.get_current_playing_info();
+
                 // let currently_playing: Result<Option<MediaInfo>, MediaError> = Ok(Some(MediaInfo{
                 //     album_name: "Test".to_owned(),
-                //     player_name: APPLE_MUSIC_ID.to_owned(),
+                //     player_name: WIN_APPLE_MUSIC_ID.to_owned(),
                 //     artist_name: "Test".to_owned(),
                 //     current_position: 0,
                 //     end_time: 1000000,
-                //     song_name: "Test Song".to_owned(),
+                //     song_name: "A".to_owned(),
                 //     status: MediaStatus::Playing,
                 //     media_type: sys_media::MediaType::Music
-
                 // }));
 
                 debug!("{currently_playing:#?}");
@@ -523,15 +527,21 @@ impl AmpleDiscordClient {
             let remaining_time = media_info.end_time - media_info.current_position;
             let end_dur = dur.saturating_add(Duration::from_micros(remaining_time as u64));
 
-            let state_name = format!("{} - {}", media_info.artist_name, media_info.album_name);
+            // Discord will not allow the details field to only have one character, so we add a little extra
+            // to satisfy it.
+            let song_name = {
+                if media_info.song_name.len() == 1 {
+                    Cow::Owned(format!("'{}'", media_info.song_name))
+                } else {
+                    trunc_str_for_discord(&media_info.song_name)
+                }
+            };
+            let long_state_name = &format!("{} - {}", media_info.artist_name, media_info.album_name);
+
+            let state_name = trunc_str_for_discord(long_state_name);
 
             let mut activity = activity::Activity::new()
-                // TODO: This function fails silently to set the activity when the song title, and thus details, is one of two things:
-                // - Too short
-                // - Starts with a number
-                // I tried to get this to work with the song 7 by the Catfish and the Bottlemen. Thus I don't
-                // know if it fails because of the 7 or because its only 1 character. Need to test this out.
-                .details(&media_info.song_name)
+                .details(&song_name)
                 .state(&state_name)
                 .activity_type(activity::ActivityType::Listening)
                 .timestamps(Timestamps::new().start(start_dur.as_secs() as i64).end(end_dur.as_secs() as i64));
@@ -561,5 +571,32 @@ fn get_lastfm_creds(client: &Agent) -> Option<LastFm> {
             error!("LastFM support not enabled: {err}");
             None
         }
+    }
+}
+
+// Truncates a string so that it'll fit for Discord (I looked it up and it seems like its 128 bytes)
+fn trunc_str_for_discord(full_name: &str) -> Cow<'_, str> {
+    let full_name_bytes_len = full_name.len();
+
+    if full_name_bytes_len < DISCORD_MAX_LENGTH {
+        Cow::Borrowed(full_name)
+    } else {
+        let mut trunc_str = Vec::new();
+
+        // Add chars until their byte size would exceed the maximum
+        // can't just slice the whole
+        for c in full_name.chars() {
+            let char_size = c.len_utf8();
+            if trunc_str.len() + char_size <= TRUNC_LEN {
+                let mut buf = [0u8; 4];
+                c.encode_utf8(&mut buf);
+                trunc_str.extend_from_slice(&buf);
+            } else {
+                break;
+            }
+        }
+
+        trunc_str.extend_from_slice(". . .".as_bytes());
+        Cow::Owned(String::from_utf8(trunc_str).expect("valid utf8"))
     }
 }
