@@ -374,6 +374,8 @@ impl NetworkThreadHandler {
                                 {
                                     error!("{r_err}");
                                 }
+                            } else {
+                                error!("Could not find album: {}, on LastFM!", info.album_name);
                             }
                         }
                         Err(err) => {
