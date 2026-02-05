@@ -262,6 +262,7 @@ fn main() {
                                 }
 
                                 // get album cover
+                                current_song_img = String::new();
                                 let send_err = blocking_msg_tx.send(BlockingThreadMessage::AlbumImg(media_info.clone()));
                                 if let Err(err) = send_err {
                                     error!("Cannot send to Blocking thread: {err}");
